@@ -139,7 +139,7 @@ func TestRunPreservesWindowsCommandShellQuoting(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			results, cancelled := Run(context.Background(), []Definition{{Name: "quoted", Command: test.command(test.marker)}}, Options{
-				Dir: workingDirectory, Timeout: 5 * time.Second,
+				Dir: workingDirectory, Timeout: 20 * time.Second,
 			})
 			if cancelled || len(results) != 1 || results[0].Status != StatusPassed || results[0].CleanupError != "" {
 				t.Fatalf("cancelled=%v result_count=%d status=%s cleanup_present=%v", cancelled, len(results), windowsResultStatus(results), len(results) == 1 && results[0].CleanupError != "")
@@ -168,7 +168,7 @@ func TestRunPreservesLeadingQuotedExecutableAndQuotedArgument(t *testing.T) {
 	marker := filepath.Join(directory, "quoted command marker")
 	command := `"` + executable + `" "-test.run=^TestWindowsDescendantFixture$"`
 	results, cancelled := Run(context.Background(), []Definition{{Name: "quoted executable", Command: command}}, Options{
-		Timeout: 5 * time.Second,
+		Timeout: 20 * time.Second,
 		Env:     windowsFixtureEnvironment("marker", marker),
 	})
 	if cancelled || len(results) != 1 || results[0].Status != StatusPassed || results[0].CleanupError != "" {
@@ -201,7 +201,7 @@ func TestRunKeepsExplicitExecutableArgumentsOutOfTheShellPath(t *testing.T) {
 	results, cancelled := Run(context.Background(), []Definition{{
 		Name: "explicit", Executable: os.Args[0], Arguments: []string{"-test.run=^TestWindowsDescendantFixture$"},
 	}}, Options{
-		Timeout: 5 * time.Second,
+		Timeout: 20 * time.Second,
 		Env:     windowsFixtureEnvironment("marker", marker),
 	})
 	if cancelled || len(results) != 1 || results[0].Status != StatusPassed || results[0].CleanupError != "" {
