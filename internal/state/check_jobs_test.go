@@ -1218,7 +1218,11 @@ func TestRerunAdmissionDeduplicatesUnderConcurrency(t *testing.T) {
 func (fixture *checkJobFixture) claimAndStart(t *testing.T, job CheckJob, runner RunnerCredential, protection string) (CheckJob, CheckAttempt) {
 	t.Helper()
 	ctx := context.Background()
-	claimed, found, err := fixture.store.ClaimCheckJob(ctx, "project", runner.ID, fixture.now)
+	var features []string
+	if job.RunID != "" {
+		features = []string{RunnerFeatureWorkflowsV1}
+	}
+	claimed, found, err := fixture.store.ClaimCheckJob(ctx, "project", runner.ID, fixture.now, features...)
 	if err != nil || !found || claimed.ID != job.ID {
 		t.Fatalf("claim job=%+v found=%v err=%v", claimed, found, err)
 	}

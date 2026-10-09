@@ -37,6 +37,35 @@ func TestStepConclusion(t *testing.T) {
 	}
 }
 
+func TestMarkSourceChanged(t *testing.T) {
+	for _, row := range []struct {
+		name  string
+		steps []StepEvidence
+		index int
+	}{
+		{"run before builtin", []StepEvidence{{Status: StatusPassed, Role: RoleRun}, {Status: StatusPassed, Role: RoleBuiltin}}, 0},
+		{"run before skipped", []StepEvidence{{Status: StatusPassed, Role: RoleRun}, {Status: StatusSkipped, Role: RoleRun}}, 0},
+		{"tolerated failure", []StepEvidence{{Status: StatusFailed, Role: RoleTolerated}}, 0},
+		{"failed run preserved", []StepEvidence{{Status: StatusFailed, Role: RoleRun}}, -1},
+		{"cleanup preserved", []StepEvidence{{Status: StatusPassed, Role: RoleTolerated, CleanupError: "cleanup failed"}}, -1},
+		{"nothing counted", []StepEvidence{{Status: StatusPassed, Role: RoleBuiltin}, {Status: StatusSkipped, Role: RoleRun}}, -1},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			before := slices.Clone(row.steps)
+			index := MarkSourceChanged(row.steps)
+			if index != row.index {
+				t.Fatalf("changed index=%d want=%d", index, row.index)
+			}
+			if index >= 0 {
+				before[index].Status, before[index].Role = StatusIncomplete, RoleRun
+			}
+			if !reflect.DeepEqual(row.steps, before) {
+				t.Fatal("source validation changed unrelated or already non-passing evidence")
+			}
+		})
+	}
+}
+
 func TestAggregateAttemptStatus(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -84,6 +113,34 @@ func TestAggregateAttemptStatus(t *testing.T) {
 				if !reflect.DeepEqual(before, steps) {
 					t.Fatal("raw evidence changed")
 				}
+			}
+		})
+	}
+}
+
+func TestJobResultEvidence(t *testing.T) {
+	for _, row := range []struct {
+		name, status, want string
+		steps              []StepResult
+		cancelled          bool
+	}{
+		{name: "timeout before run", status: StatusIncomplete, want: StatusIncomplete, steps: []StepResult{{ScriptResult: ScriptResult{Status: StatusSkipped}, Role: RoleRun}}},
+		{name: "timeout before builtin", status: StatusIncomplete, want: StatusIncomplete, steps: []StepResult{{ScriptResult: ScriptResult{Status: StatusSkipped}, Role: RoleBuiltin}}},
+		{name: "ordinary skipped", status: StatusSkipped, want: StatusSkipped, steps: []StepResult{{ScriptResult: ScriptResult{Status: StatusSkipped}, Role: RoleRun}}},
+		{name: "builtins only", status: StatusSkipped, want: StatusSkipped, steps: []StepResult{{ScriptResult: ScriptResult{Status: StatusPassed}, Role: RoleBuiltin}}},
+		{name: "counted failure preserved", status: StatusIncomplete, want: StatusFailed, steps: []StepResult{{ScriptResult: ScriptResult{Status: StatusFailed}, Role: RoleRun}}},
+		{name: "cleanup preserved", status: StatusIncomplete, want: StatusError, steps: []StepResult{{ScriptResult: ScriptResult{Status: StatusSkipped, CleanupError: "cleanup failed"}, Role: RoleBuiltin}}},
+		{name: "cancellation preserved", status: StatusIncomplete, want: StatusCancelled, cancelled: true, steps: []StepResult{{ScriptResult: ScriptResult{Status: StatusSkipped}, Role: RoleRun}}},
+		{name: "no step identity", status: StatusIncomplete, want: StatusSkipped},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			before := slices.Clone(row.steps)
+			job := JobResult{Steps: row.steps, Status: row.status, Cancelled: row.cancelled}
+			if got := AggregateAttemptStatus(job.Evidence(), job.Cancelled); got != row.want {
+				t.Fatalf("submitted status=%s want=%s", got, row.want)
+			}
+			if !reflect.DeepEqual(row.steps, before) {
+				t.Fatal("submission changed raw step results")
 			}
 		})
 	}

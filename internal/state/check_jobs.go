@@ -23,6 +23,11 @@ const (
 	CheckExecutorExternalRunner = "external_runner"
 )
 
+// RunnerFeatureWorkflowsV1 identifies runners that execute Actions job plans.
+const RunnerFeatureWorkflowsV1 = "workflows-v1"
+
+const runnerOldNote = "note.runner_old: A runner without workflows-v1 cannot run this job. Update the runner."
+
 // Job states. Pending, waiting, claimed, and started are unfinished. The remaining
 // states are terminal and are never silently requeued: ambiguous and
 // interrupted work needs an explicit rerun.
@@ -1582,11 +1587,11 @@ func validateCheckJobRequest(request CheckJobRequest) error {
 // ClaimCheckJob leases an external-runner job under a live repository-scoped
 // runner credential. The credential role, not a caller-supplied mode, selects
 // the only executor this boundary can claim.
-func (s *Store) ClaimCheckJob(ctx context.Context, repositoryID, credentialID string, now time.Time) (CheckJob, bool, error) {
+func (s *Store) ClaimCheckJob(ctx context.Context, repositoryID, credentialID string, now time.Time, features ...string) (CheckJob, bool, error) {
 	if repositoryID == "" || !validAttemptID(credentialID) || now.IsZero() {
 		return CheckJob{}, false, fmt.Errorf("%w: invalid claim", ErrInvalidCheckJob)
 	}
-	return s.claimCheckJob(ctx, repositoryID, credentialID, RunnerRoleExternal, now)
+	return s.claimCheckJob(ctx, repositoryID, credentialID, RunnerRoleExternal, now, slices.Contains(features, RunnerFeatureWorkflowsV1))
 }
 
 // ClaimLocalCheckJob is the in-process claim boundary used only by serve for
@@ -1596,10 +1601,10 @@ func (s *Store) ClaimLocalCheckJob(ctx context.Context, repositoryID string, now
 	if repositoryID == "" || now.IsZero() {
 		return CheckJob{}, false, fmt.Errorf("%w: invalid local claim", ErrInvalidCheckJob)
 	}
-	return s.claimCheckJob(ctx, repositoryID, "", RunnerRoleServer, now)
+	return s.claimCheckJob(ctx, repositoryID, "", RunnerRoleServer, now, true)
 }
 
-func (s *Store) claimCheckJob(ctx context.Context, repositoryID, credentialID, role string, now time.Time) (CheckJob, bool, error) {
+func (s *Store) claimCheckJob(ctx context.Context, repositoryID, credentialID, role string, now time.Time, workflows bool) (CheckJob, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return CheckJob{}, false, err
@@ -1655,7 +1660,12 @@ func (s *Store) claimCheckJob(ctx context.Context, repositoryID, credentialID, r
 		}
 		return CheckJob{}, false, nil
 	}
-	job, exists, err := oldestPendingCheckJobTx(ctx, tx, repositoryID)
+	if !workflows {
+		if _, err := tx.ExecContext(ctx, `UPDATE check_jobs SET summary=? WHERE repository_id=? AND status='pending' AND run_id!='' AND summary=''`, runnerOldNote, repositoryID); err != nil {
+			return CheckJob{}, false, err
+		}
+	}
+	job, exists, err := oldestPendingCheckJobTx(ctx, tx, repositoryID, workflows)
 	if err != nil {
 		return CheckJob{}, false, err
 	}
@@ -2168,8 +2178,9 @@ func readCheckJobByDedupTx(ctx context.Context, queryer querier, repositoryID, d
 	return job, err == nil, err
 }
 
-func oldestPendingCheckJobTx(ctx context.Context, queryer querier, repositoryID string) (CheckJob, bool, error) {
-	job, err := scanCheckJob(queryer.QueryRowContext(ctx, checkJobSelect+` WHERE repository_id=? AND status='pending' ORDER BY admitted_at,id LIMIT 1`, repositoryID))
+func oldestPendingCheckJobTx(ctx context.Context, queryer querier, repositoryID string, workflows bool) (CheckJob, bool, error) {
+	job, err := scanCheckJob(queryer.QueryRowContext(ctx, checkJobSelect+` WHERE repository_id=? AND status='pending'
+		AND (? OR run_id='') ORDER BY admitted_at,id LIMIT 1`, repositoryID, workflows))
 	if errors.Is(err, sql.ErrNoRows) {
 		return CheckJob{}, false, nil
 	}

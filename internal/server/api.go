@@ -513,12 +513,16 @@ func writeAPIJSON(writer http.ResponseWriter, status int, value any) {
 
 // encodeAPIJSON returns the status and body writeAPIJSON sends for value.
 func encodeAPIJSON(status int, value any) (int, []byte) {
+	return encodeAPIJSONLimit(status, value, maximumAPIResponse)
+}
+
+func encodeAPIJSONLimit(status int, value any, limit int) (int, []byte) {
 	var output bytes.Buffer
 	encoder := json.NewEncoder(&output)
 	encoder.SetEscapeHTML(true)
 	err := encoder.Encode(value)
 	encoded := bidi.EscapeJSON(output.Bytes())
-	if err != nil || len(encoded) > maximumAPIResponse {
+	if err != nil || len(encoded) > limit {
 		output.Reset()
 		_ = json.NewEncoder(&output).Encode(pullrequest.ErrorEnvelope{
 			OK: false, Error: pullrequest.ErrorDescription{Code: "response_too_large", Message: "The API response exceeds the supported size."},

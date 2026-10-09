@@ -36,6 +36,21 @@ func expressionValues(value any, cache map[string]any, depth int, steps *int) (a
 			out[key] = converted
 		}
 		return out, nil
+	case map[string]string:
+		identity := fmt.Sprintf("map:%p", value)
+		if old, ok := cache[identity]; ok {
+			return old, nil
+		}
+		out := make(map[string]any, len(value))
+		cache[identity] = out
+		for key, item := range value {
+			converted, err := expressionValues(item, cache, depth+1, steps)
+			if err != nil {
+				return nil, err
+			}
+			out[key] = converted
+		}
+		return out, nil
 	case []any:
 		identity := ""
 		if len(value) > 0 {

@@ -9,7 +9,7 @@ import (
 func TestExpression(t *testing.T) {
 	ctx := EvalContext{Success: true, Values: map[string]any{
 		"github":  map[string]any{"ref": "refs/heads/main", "sha": "abc", "workspace": "/synthetic/workspace", "event": map[string]any{"pull_request": map[string]any{"head": map[string]any{"sha": "def"}}}},
-		"inputs":  map[string]any{"number": float64(7), "list": []any{"One", "Two"}, "empty": []any{}, "object": map[string]any{"key": "value"}, "index": "number"},
+		"inputs":  map[string]any{"number": float64(7), "list": []any{"One", "Two"}, "empty": []any{}, "object": map[string]any{"key": "value"}, "strings": map[string]string{"key": "value"}, "index": "number"},
 		"env":     map[string]any{"LONG": strings.Repeat("x", MaxValueBytes), "ESCAPED": strings.Repeat("\x01", 12000), "LARGE": strings.Repeat("x", MaxValueBytes+1)},
 		"secrets": map[string]any{"TOKEN": "synthetic-value"},
 		"steps":   map[string]any{"cache": map[string]any{"outputs": map[string]any{"cache-hit": "false"}}},
@@ -21,7 +21,7 @@ func TestExpression(t *testing.T) {
 	cancelled.Success, cancelled.Cancelled = false, true
 	posix := ctx
 	posix.Values = cloneMap(ctx.Values)
-	posix.Values["env"] = map[string]any{"MODE": "upper"}
+	posix.Values["env"] = map[string]string{"MODE": "upper"}
 	posix.Values["runner"] = map[string]any{"os": "Linux"}
 	windows := posix
 	windows.Values = cloneMap(posix.Values)
@@ -58,6 +58,7 @@ func TestExpression(t *testing.T) {
 		{name: "empty array identity", text: "inputs.empty == inputs.empty", want: true},
 		{name: "distinct empty arrays", text: "fromJSON('[]') == fromJSON('[]')", want: false},
 		{name: "object identity", text: "inputs.object == inputs.object", want: true},
+		{name: "string-map object", text: "inputs.strings.KEY == 'value' && inputs.strings.absent == null && inputs.strings == inputs.strings", want: true},
 		{name: "distinct objects", text: "fromJSON('{}') == fromJSON('{}')", want: false},
 		{name: "contains array", text: "contains(inputs.list, 'one')", want: true},
 		{name: "contains string", text: "contains('abcd', 'BC')", want: true},

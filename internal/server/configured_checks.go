@@ -335,7 +335,11 @@ func (app *App) handleRunnerAPI(writer http.ResponseWriter, request *http.Reques
 			writeAPIMethodError(writer, http.MethodPost)
 			return
 		}
-		job, claimed, err := app.Store.ClaimCheckJob(request.Context(), repositoryID, credential.ID, app.now())
+		var input checkapi.RunnerClaimInput
+		if request.ContentLength != 0 && !decodeAPIJSON(writer, request, &input) {
+			return
+		}
+		job, claimed, err := app.Store.ClaimCheckJob(request.Context(), repositoryID, credential.ID, app.now(), input.Features...)
 		if err != nil {
 			writeRunnerError(writer, request, err)
 			return
@@ -392,6 +396,10 @@ func (app *App) handleRunnerAPI(writer http.ResponseWriter, request *http.Reques
 			writeAPIError(writer, http.StatusUnprocessableEntity, "invalid_runner_start", "The runner start identity is invalid.", nil)
 			return
 		}
+		grant, ready := app.preflightRunnerActions(writer, request, repositoryID, authority)
+		if !ready {
+			return
+		}
 		started, attempt, err := app.Store.StartCheckJob(request.Context(), state.CheckJobStart{
 			RepositoryID: repositoryID, JobID: jobID, LeaseID: leaseID,
 			CredentialID: credential.ID, CredentialGeneration: credential.Generation,
@@ -414,7 +422,12 @@ func (app *App) handleRunnerAPI(writer http.ResponseWriter, request *http.Reques
 			writeRunnerError(writer, request, err)
 			return
 		}
-		writeAPIJSON(writer, http.StatusOK, checkapi.JobResponse{OK: true, Job: jobJSON(started, attempt.Checks), Attempt: app.attemptJSON(request, attempt)})
+		writer.Header().Set("Cache-Control", "no-store")
+		status, encoded := encodeAPIJSONLimit(http.StatusOK, checkapi.RunnerStartResponse{
+			JobResponse: checkapi.JobResponse{OK: true, Job: jobJSON(started, attempt.Checks), Attempt: app.attemptJSON(request, attempt)},
+			Actions:     grant,
+		}, checkapi.MaximumRunnerStartBytes)
+		writeEncodedAPIJSON(writer, status, encoded)
 	case "complete":
 		var input checkapi.RunnerCompletionInput
 		if !decodeAPIJSONLimit(writer, request, &input, maximumCheckUpload) {
@@ -606,6 +619,7 @@ func jobJSON(job state.CheckJob, checks []state.CheckDefinition) *checkapi.Job {
 		ID: job.ID, RepositoryID: job.RepositoryID, TaskID: job.TaskID, Trigger: job.Trigger, EventKey: job.EventKey,
 		SourceOID: job.SourceOID, BaseOID: job.BaseOID, PullRequestNumber: job.PullRequestNumber, TriggerRef: job.TriggerRef,
 		WorkflowPath: job.WorkflowPath, WorkflowOID: job.WorkflowOID, WorkflowDigest: job.WorkflowDigest,
+		RunID: job.RunID, JobKey: job.JobKey, MatrixIndex: job.MatrixIndex, PlanDigest: job.PlanDigest,
 		ConfigurationVersion: job.ConfigurationVersion, Executor: job.Executor, PolicyVersion: job.PolicyVersion,
 		ConsentVersion: job.ConsentVersion, Limits: job.Limits, Execution: job.Execution,
 		Status: job.Status, AttemptID: job.AttemptID, LeaseID: job.LeaseID, LeaseExpiresAt: job.LeaseExpiresAt,

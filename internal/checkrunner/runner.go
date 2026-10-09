@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"owngit/internal/actions"
 	"owngit/internal/apiclient"
 	"owngit/internal/checkapi"
 	"owngit/internal/checkexec"
@@ -213,7 +214,7 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 // marks such an unknown claim ambiguous when its lease expires.
 func (runner *Runner) runOne(ctx context.Context, workspaceRoot *checksource.WorkspaceRoot) (string, error) {
 	base := "/api/v1/repositories/" + url.PathEscape(runner.RepositoryID) + "/runner"
-	content, err := runner.Client.Do(ctx, http.MethodPost, base+"/claim", nil)
+	content, err := runner.Client.Do(ctx, http.MethodPost, base+"/claim", checkapi.RunnerClaimInput{Features: []string{state.RunnerFeatureWorkflowsV1}})
 	if err != nil {
 		return runner.notHandedOver(ctx, base, checkapi.ClaimedJob{}, err)
 	}
@@ -277,21 +278,44 @@ func (runner *Runner) runOne(ctx context.Context, workspaceRoot *checksource.Wor
 		return job.ID, err
 	}
 	startInput := checkapi.RunnerStartInput{LeaseID: job.LeaseID, AttemptID: attemptID}
-	if _, err := runner.Client.DoWithHeaders(leaseContext, http.MethodPost, base+"/jobs/"+job.ID+"/start", startInput, leaseHeaders(job.LeaseID)); err != nil {
+	startClient := *runner.Client
+	startClient.MaximumResponse = checkapi.MaximumRunnerStartBytes
+	startContent, err := startClient.DoWithHeaders(leaseContext, http.MethodPost, base+"/jobs/"+job.ID+"/start", startInput, leaseHeaders(job.LeaseID))
+	if err != nil {
 		_ = workspaceRoot.RemoveJob(job.ID)
 		cancelLease()
 		<-leaseErrors
 		return runner.notHandedOver(ctx, base, checkapi.ClaimedJob{JobID: job.ID, LeaseID: job.LeaseID}, err)
 	}
 
-	definitions := make([]checkexec.Definition, 0, len(job.Checks))
-	for _, check := range job.Checks {
-		definitions = append(definitions, checkexec.Definition{Name: check.Name, Command: check.Command})
+	var results []checkexec.Result
+	var roles []string
+	var cancelled bool
+	var notes string
+	if job.RunID != "" {
+		results, roles, cancelled, notes, err = runner.runActions(leaseContext, job, startContent, workspace)
+		if err != nil {
+			cancelLease()
+			<-leaseErrors
+			_ = workspaceRoot.RemoveJob(job.ID)
+			return job.ID, err
+		}
+	} else {
+		definitions := make([]checkexec.Definition, 0, len(job.Checks))
+		for _, check := range job.Checks {
+			definitions = append(definitions, checkexec.Definition{Name: check.Name, Command: check.Command})
+		}
+		results, cancelled = checkexec.Run(leaseContext, definitions, checkexec.Options{
+			Dir: workspace, TempRoot: filepath.Dir(workspace), Timeout: time.Duration(job.Limits.TimeoutMS) * time.Millisecond,
+			OutputLimit: job.Limits.OutputLimitBytes,
+		})
 	}
-	results, cancelled := checkexec.Run(leaseContext, definitions, checkexec.Options{
-		Dir: workspace, TempRoot: filepath.Dir(workspace), Timeout: time.Duration(job.Limits.TimeoutMS) * time.Millisecond,
-		OutputLimit: job.Limits.OutputLimitBytes,
-	})
+	workflowSafeCleanupMessage := func(message string, err error) string {
+		if job.RunID != "" {
+			return message + " failed."
+		}
+		return bounded(message + ": " + err.Error())
+	}
 	submittedWorktree := state.WorktreeClean
 	verifyContext, cancelVerify := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	clean, verifyErr := checksource.VerifyResult(verifyContext, materialization)
@@ -300,27 +324,35 @@ func (runner *Runner) runOne(ctx context.Context, workspaceRoot *checksource.Wor
 		submittedWorktree = state.WorktreeUnknown
 		if len(results) != 0 {
 			results[len(results)-1].Status = checkexec.StatusError
-			results[len(results)-1].CleanupError = bounded("verify private runner workspace: " + verifyErr.Error())
+			results[len(results)-1].CleanupError = workflowSafeCleanupMessage("verify private runner workspace", verifyErr)
 		}
 	} else if !clean {
 		submittedWorktree = state.WorktreeDirty
-		if len(results) != 0 && results[len(results)-1].Status == checkexec.StatusPassed {
+		if job.RunID != "" {
+			facts := make([]actions.StepEvidence, len(results))
+			for index, result := range results {
+				facts[index] = actions.StepEvidence{Status: result.Status, Role: roles[index], CleanupError: result.CleanupError}
+			}
+			if index := actions.MarkSourceChanged(facts); index >= 0 {
+				results[index].Status, roles[index] = facts[index].Status, facts[index].Role
+			}
+		} else if len(results) != 0 && results[len(results)-1].Status == checkexec.StatusPassed {
 			results[len(results)-1].Status = checkexec.StatusIncomplete
 		}
 	}
 	if cleanupErr := workspaceRoot.RemoveJob(job.ID); cleanupErr != nil && len(results) != 0 {
 		results[len(results)-1].Status = checkexec.StatusError
-		results[len(results)-1].CleanupError = bounded("remove private runner workspace: " + cleanupErr.Error())
+		results[len(results)-1].CleanupError = workflowSafeCleanupMessage("remove private runner workspace", cleanupErr)
 	}
 	cancelLease()
 	leaseErr := <-leaseErrors
 	if leaseErr != nil && !errors.Is(leaseErr, context.Canceled) && len(results) != 0 {
 		results[len(results)-1].Status = checkexec.StatusError
-		results[len(results)-1].CleanupError = bounded("runner lease became uncertain: " + leaseErr.Error())
+		results[len(results)-1].CleanupError = workflowSafeCleanupMessage("runner lease became uncertain", leaseErr)
 	}
-	log, logTruncated := runnerLog(results)
+	log, logTruncated := runnerLog(results, notes)
 	completion := checkapi.AttemptCompletion{
-		Results: runnerResults(results), Cancelled: cancelled, FinishedAt: time.Now().UTC(),
+		Results: runnerResults(results, roles...), Cancelled: cancelled, FinishedAt: time.Now().UTC(),
 		WorktreeState: submittedWorktree, Log: log, LogTruncated: logTruncated,
 	}
 	input := checkapi.RunnerCompletionInput{LeaseID: job.LeaseID, Completion: completion}
@@ -490,9 +522,13 @@ func (source *remoteSource) CommitOID() string {
 
 func leaseHeaders(leaseID string) map[string]string { return map[string]string{leaseHeader: leaseID} }
 
-func runnerResults(results []checkexec.Result) []checkapi.Result {
+func runnerResults(results []checkexec.Result, roles ...string) []checkapi.Result {
 	converted := make([]checkapi.Result, 0, len(results))
-	for _, result := range results {
+	for index, result := range results {
+		role := ""
+		if index < len(roles) {
+			role = roles[index]
+		}
 		excerpt, cut := checkapi.ClipLog(result.Output, state.MaximumCheckExcerptBytes, result.OutputGap)
 		truncated := result.Truncated || cut
 		cleanupError := result.CleanupError
@@ -500,7 +536,7 @@ func runnerResults(results []checkexec.Result) []checkapi.Result {
 			cleanupError = bounded(cleanupError)
 		}
 		converted = append(converted, checkapi.Result{
-			Name: result.Name, Command: result.Command, Status: result.Status, ExitCode: result.ExitCode,
+			Name: result.Name, Command: result.Command, Status: result.Status, ExitCode: result.ExitCode, Role: role,
 			DurationMS: result.Duration.Milliseconds(), OutputExcerpt: excerpt, Truncated: truncated,
 			CleanupError: cleanupError,
 		})
@@ -508,8 +544,11 @@ func runnerResults(results []checkexec.Result) []checkapi.Result {
 	return converted
 }
 
-func runnerLog(results []checkexec.Result) (string, bool) {
+func runnerLog(results []checkexec.Result, notes ...string) (string, bool) {
 	log := checkapi.LogBuffer{Limit: maximumRunnerLog}
+	for _, note := range notes {
+		log.Add(note)
+	}
 	for _, result := range results {
 		// Output may be far larger than the log, so it is added as its own part
 		// rather than copied whole into one string before the cut.

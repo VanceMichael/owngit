@@ -110,6 +110,19 @@ type JobResult struct {
 	Notes     []Message
 }
 
+// Evidence preserves a job-level incomplete outcome when no step was counted.
+// It leaves the raw step results unchanged.
+func (job JobResult) Evidence() []StepEvidence {
+	facts := make([]StepEvidence, len(job.Steps))
+	for index, step := range job.Steps {
+		facts[index] = step.Evidence()
+	}
+	if job.Status == StatusIncomplete && len(facts) != 0 && AggregateAttemptStatus(facts, job.Cancelled) == StatusSkipped {
+		facts[0].Status, facts[0].Role = StatusIncomplete, RoleRun
+	}
+	return facts
+}
+
 // RunJob executes an already admitted job. It never reads secrets or plans from
 // storage, chooses a machine, or grants execution authority.
 func RunJob(ctx context.Context, plan JobPlan, options RunOptions) JobResult {
@@ -219,9 +232,10 @@ func RunJob(ctx context.Context, plan JobPlan, options RunOptions) JobResult {
 	}
 	failed, stopped := false, false
 	for index, step := range plan.Steps {
-		result := StepResult{Index: index, ID: mask.text(step.ID), Name: mask.text(step.Name), Command: mask.text(step.Run), ScriptResult: ScriptResult{Status: StatusSkipped}, Role: RoleRun}
+		name, command := StepDisplay(step)
+		result := StepResult{Index: index, ID: mask.text(step.ID), Name: mask.text(name), Command: mask.text(command), ScriptResult: ScriptResult{Status: StatusSkipped}, Role: RoleRun}
 		if step.Uses != "" {
-			result.Command, result.Role = mask.text(step.Uses), RoleBuiltin
+			result.Role = RoleBuiltin
 		}
 		if jobCtx.Err() != nil || stopped {
 			job.Steps = append(job.Steps, result)

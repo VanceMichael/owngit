@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"owngit/internal/actions"
 	"owngit/internal/checkapi"
 	"owngit/internal/logtext"
 	"owngit/internal/pullrequest"
@@ -563,7 +564,7 @@ func completionFromUpload(upload checkapi.AttemptCompletion, repositoryID, taskI
 		results = append(results, state.CheckResult{
 			Name: result.Name, Command: result.Command, Status: result.Status, ExitCode: result.ExitCode,
 			DurationMS: result.DurationMS, OutputExcerpt: excerpt, Truncated: result.Truncated || excerptCut,
-			CleanupError: result.CleanupError,
+			CleanupError: result.CleanupError, Role: result.Role,
 		})
 	}
 	return state.CheckCompletion{
@@ -574,7 +575,7 @@ func completionFromUpload(upload checkapi.AttemptCompletion, repositoryID, taskI
 
 func validResultStatus(status string) bool {
 	switch status {
-	case state.AttemptPassed, state.AttemptFailed, state.AttemptError, state.AttemptCancelled, state.AttemptIncomplete, state.AttemptUnavailable:
+	case state.AttemptPassed, state.AttemptFailed, state.AttemptError, state.AttemptCancelled, state.AttemptIncomplete, state.AttemptUnavailable, actions.StatusSkipped, actions.StatusNotRun:
 		return true
 	default:
 		return false
@@ -645,7 +646,7 @@ func (app *App) attemptJSON(request *http.Request, attempt state.CheckAttempt) *
 		response.Results = append(response.Results, checkapi.Result{
 			Name: result.Name, Command: result.Command, Status: result.Status, ExitCode: result.ExitCode,
 			DurationMS: result.DurationMS, OutputExcerpt: result.OutputExcerpt, Truncated: result.Truncated,
-			CleanupError: result.CleanupError,
+			CleanupError: result.CleanupError, Role: result.Role,
 		})
 	}
 	return response

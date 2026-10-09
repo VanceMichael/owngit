@@ -85,6 +85,7 @@ type Result struct {
 	Name          string `json:"name"`
 	Command       string `json:"command"`
 	Status        string `json:"status"`
+	Role          string `json:"role,omitempty"`
 	ExitCode      *int   `json:"exit_code,omitempty"`
 	DurationMS    int64  `json:"duration_ms"`
 	OutputExcerpt string `json:"output_excerpt,omitempty"`
@@ -352,6 +353,10 @@ type Job struct {
 	StartedAt            *time.Time                   `json:"started_at,omitempty"`
 	FinishedAt           *time.Time                   `json:"finished_at,omitempty"`
 	Checks               []CheckDefinition            `json:"checks,omitempty"`
+	RunID                string                       `json:"run_id,omitempty"`
+	JobKey               string                       `json:"job_key,omitempty"`
+	MatrixIndex          int                          `json:"matrix_index,omitempty"`
+	PlanDigest           string                       `json:"plan_digest,omitempty"`
 }
 
 type JobResponse struct {
@@ -392,6 +397,30 @@ type RunnerCredentialListResponse struct {
 
 type RunnerLeaseInput struct {
 	LeaseID string `json:"lease_id"`
+}
+
+type RunnerClaimInput struct {
+	Features []string `json:"features,omitempty"`
+}
+
+// MaximumRunnerStartBytes covers secrets at six JSON bytes per input byte.
+// A canonical plan string and its selected names use at most three times the
+// plan bound (including bidi escaping). The envelope covers captured displays.
+// Only the one-shot start answer carries secrets.
+const MaximumRunnerStartBytes = state.MaxWorkflowSecrets*state.MaxWorkflowSecretValueBytes*6 + state.MaximumActionsPlanBytes*3 + (1 << 20)
+
+type RunnerStartResponse struct {
+	JobResponse
+	Actions *RunnerActionsGrant `json:"actions,omitempty"`
+}
+
+type RunnerActionsGrant struct {
+	// Plan is a string so JSON encoding preserves its exact digested bytes.
+	Plan       string            `json:"plan"`
+	RunID      string            `json:"run_id"`
+	RunNumber  int64             `json:"run_number"`
+	RunAttempt int64             `json:"run_attempt"`
+	Secrets    map[string]string `json:"secrets"`
 }
 
 type RunnerStartInput struct {
