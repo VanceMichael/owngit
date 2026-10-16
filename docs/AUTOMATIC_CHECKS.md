@@ -17,6 +17,12 @@ Results show on the repository's Checks tab and on each pull request. They are
 advisory and never block a merge. To run checks from a coding tool on your own
 computer instead, see [Coding tools](CODING_TOOLS.md).
 
+Checks stay advisory for manual merges. On an open pull request you can
+separately enable automatic merging, after which OwnGit merges the request
+itself once its current source commit's checks finished with a pass on a clean
+worktree and the current pair merges without a conflict. See
+[Automatic merge](CODING_TOOLS.md#automatic-merge) in the coding tools guide.
+
 ## Check file
 
 The repository chooses what to run and when. OwnGit reads the file from the

@@ -28,6 +28,7 @@ import (
 
 	"owngit/internal/apiclient"
 	"owngit/internal/auth"
+	"owngit/internal/automerge"
 	"owngit/internal/backups"
 	"owngit/internal/bootstrap"
 	"owngit/internal/checkrun"
@@ -515,15 +516,21 @@ func serveWithContext(ctx context.Context, arguments []string, opener func(strin
 	}
 	defer repositories.ReleaseStorage()
 	pullRequests := &pullrequest.Service{Store: store, Repositories: repositories}
+	// The auto-merge convergence loop is built before any check or repository
+	// hook can signal it; its Wake is a no-op until Start runs.
+	autoMerger := automerge.New(store, pullRequests, logf)
+	pullRequests.OnChange = autoMerger.Wake
 	// A repository that becomes ready in the background wakes check
 	// reconciliation, so the hook is set before preparation starts. Wake does
 	// nothing until the coordinator starts.
-	checkCoordinator := &checkrun.Coordinator{Store: store, Repositories: repositories, PullRequests: pullRequests, Logf: logf}
+	checkCoordinator := &checkrun.Coordinator{Store: store, Repositories: repositories, PullRequests: pullRequests, Logf: logf, OnCheckCompletion: autoMerger.Wake}
 	var changeApp atomic.Pointer[server.App]
 	var changeImports atomic.Pointer[importLifetime]
-	// A repository change or readiness wakes reconciliation and activity.
+	// A repository change or readiness wakes reconciliation, activity and
+	// automatic merging.
 	noteChange := func(id string) {
 		checkCoordinator.Wake(id)
+		autoMerger.Wake(id)
 		if imports := changeImports.Load(); imports != nil {
 			imports.wakeReconciliation()
 		}
@@ -689,6 +696,7 @@ func serveWithContext(ctx context.Context, arguments []string, opener func(strin
 	application := &server.App{
 		Store: store, Auth: authentication, Repositories: repositories, PullRequests: pullRequests, GitHTTP: gitHandler,
 		Renderer: renderer, Hosts: policy, Network: live, SuggestedRepositoryRoot: filepath.Join(home, "OwnGit-Repositories"),
+		OnCheckCompletion: autoMerger.Wake,
 		Tailscale: &server.Tailscale{
 			Store: store,
 			Find:  func() (tailscale.Command, error) { return findTailscale(*tailscalePath) },
@@ -820,6 +828,13 @@ func serveWithContext(ctx context.Context, arguments []string, opener func(strin
 	} else {
 		defer shutdown.stop(logf, "configured check shutdown", checkCoordinator.Stop)
 	}
+	autoMergeContext, cancelAutoMerges := context.WithCancel(ctx)
+	defer cancelAutoMerges()
+	autoMerger.Start(autoMergeContext)
+	defer shutdown.stop(logf, "auto-merge shutdown", func(context.Context) error {
+		autoMerger.Stop()
+		return nil
+	})
 
 	if !settings.Initialized && !terminalSetup {
 		path, err := (&bootstrap.Issuer{Store: store, BaseURL: origin}).Issue(ctx)

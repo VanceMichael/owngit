@@ -21,7 +21,7 @@ func TestBeforeUpgradeSeesTheStateUnchangedAndCanStopTheUpgrade(t *testing.T) {
 	calls := 0
 	_, err := openWithBeforeUpgrade(t, directory, func(ctx context.Context, upgrade *Upgrade) error {
 		calls++
-		if upgrade.From != 15 || upgrade.To != 17 || upgrade.Describe() != "from schema 15 to 17" {
+		if upgrade.From != 15 || upgrade.To != 18 || upgrade.Describe() != "from schema 15 to 18" {
 			t.Fatalf("upgrade=%d to %d (%s)", upgrade.From, upgrade.To, upgrade.Describe())
 		}
 		assertSchemaDirectoryUnchanged(t, directory, before)
@@ -30,7 +30,7 @@ func TestBeforeUpgradeSeesTheStateUnchangedAndCanStopTheUpgrade(t *testing.T) {
 			t.Fatalf("open copy: %v", err)
 		}
 		defer copied.Close()
-		if version, _, err := readSchemaVersion(ctx, copied.db); err != nil || version != 17 {
+		if version, _, err := readSchemaVersion(ctx, copied.db); err != nil || version != 18 {
 			t.Fatalf("copy schema=%d err=%v", version, err)
 		}
 		assertPullRequestHistoryKept(t, copied)
@@ -46,7 +46,7 @@ func TestBeforeUpgradeSeesTheStateUnchangedAndCanStopTheUpgrade(t *testing.T) {
 	// state has no upgrade.
 	store, err := openWithBeforeUpgrade(t, directory, func(context.Context, *Upgrade) error { calls++; return nil })
 	noErr(t, err)
-	if version, _, err := readSchemaVersion(ctx, store.db); err != nil || version != 17 || calls != 2 {
+	if version, _, err := readSchemaVersion(ctx, store.db); err != nil || version != 18 || calls != 2 {
 		t.Fatalf("schema=%d err=%v calls=%d", version, err, calls)
 	}
 	noErr(t, store.Close())

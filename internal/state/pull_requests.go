@@ -111,6 +111,20 @@ type PullRequestMergeIntent struct {
 	UpdatedAt         time.Time
 }
 
+// PullRequestAutoMerge is an open pull request's opt-in intent to merge
+// automatically once the checks of its current source revision pass. A row
+// exists only while the intent is enabled and the pull request is open; the
+// same transaction that closes the request or records its merge deletes the
+// row. It binds to the request, not to a revision: branch moves keep the row
+// and the merge decision is always taken for the current source and target.
+type PullRequestAutoMerge struct {
+	RepositoryID      string
+	PullRequestNumber int64
+	EnabledAt         time.Time
+	UpdatedAt         time.Time
+	EnabledBy         Actor
+}
+
 // PullRequestCreation is what creating a pull request records: the pull
 // request, the revision pair it starts at, and the initial review choice for
 // that pair, made by CreatedBy.
@@ -232,6 +246,10 @@ func (s *Store) ActivatePullRequestCreation(ctx context.Context, repositoryID st
 // a close or reopen expected.
 var ErrPullRequestStateChanged = errors.New("pull request state changed")
 
+// ErrPullRequestNotFound reports that no visible pull request has the
+// repository and number an operation named.
+var ErrPullRequestNotFound = errors.New("pull request not found")
+
 // SetPullRequestClosed closes an open pull request, or reopens a closed one
 // when closed is false. Any other state is left unchanged and reported with
 // ErrPullRequestStateChanged.
@@ -258,6 +276,14 @@ func (s *Store) SetPullRequestClosed(ctx context.Context, repositoryID string, n
 			return PullRequest{}, err
 		}
 		return PullRequest{}, ErrPullRequestStateChanged
+	}
+	// Closing removes the auto-merge intent in the same state change, so a
+	// background merge that takes the repository lock after the close finds
+	// no intent to publish. Reopening does not bring it back.
+	if closed {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM pull_request_auto_merges WHERE repository_id=? AND pull_request_number=?`, repositoryID, number); err != nil {
+			return PullRequest{}, err
+		}
 	}
 	record, err := scanPullRequest(tx.QueryRowContext(ctx, pullRequestSelect+` WHERE repository_id=? AND number=?`, repositoryID, number))
 	if err != nil {
@@ -886,11 +912,157 @@ func (s *Store) CompletePullRequestMerge(ctx context.Context, intent PullRequest
 	} else {
 		return errors.New("pull request has an invalid state")
 	}
+	// The published merge ends the auto-merge intent in the same transaction,
+	// so a wake that runs after the merge finds nothing left to publish.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pull_request_auto_merges WHERE repository_id=? AND pull_request_number=?`, intent.RepositoryID, intent.PullRequestNumber); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE pull_request_merge_intents SET status='complete',updated_at=?
 		WHERE repository_id=? AND pull_request_number=? AND source_oid=? AND target_oid=?`, completedAt.Unix(), intent.RepositoryID, intent.PullRequestNumber, intent.SourceOID, intent.TargetOID); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// EnablePullRequestAutoMerge records an auto-merge intent for an open pull
+// request. Enabling an intent that already exists is idempotent: the first
+// enabled_at and actor are kept and nothing is rewritten. A pull request that
+// is missing, provisional, closed, or merged is refused with
+// ErrPullRequestNotFound or ErrPullRequestStateChanged.
+func (s *Store) EnablePullRequestAutoMerge(ctx context.Context, repositoryID string, number int64, enabledBy Actor, now time.Time) (PullRequestAutoMerge, error) {
+	if number <= 0 || now.IsZero() {
+		return PullRequestAutoMerge{}, errors.New("invalid pull request auto-merge")
+	}
+	encoded, err := encodeActor(enabledBy)
+	if err != nil {
+		return PullRequestAutoMerge{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return PullRequestAutoMerge{}, err
+	}
+	defer tx.Rollback()
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM pull_requests WHERE repository_id=? AND number=? AND status!='creating'`, repositoryID, number).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PullRequestAutoMerge{}, ErrPullRequestNotFound
+		}
+		return PullRequestAutoMerge{}, err
+	}
+	if status != PullRequestOpen {
+		return PullRequestAutoMerge{}, ErrPullRequestStateChanged
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO pull_request_auto_merges(
+		repository_id,pull_request_number,enabled_at,updated_at,enabled_by
+	) VALUES(?,?,?,?,?)`, repositoryID, number, now.Unix(), now.Unix(), encoded); err != nil {
+		return PullRequestAutoMerge{}, err
+	}
+	record, err := scanPullRequestAutoMerge(tx.QueryRowContext(ctx, pullRequestAutoMergeSelect+` WHERE repository_id=? AND pull_request_number=?`, repositoryID, number))
+	if err != nil {
+		return PullRequestAutoMerge{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PullRequestAutoMerge{}, err
+	}
+	return record, nil
+}
+
+// PullRequestAutoMerge reads one enabled intent. ok is false when the pull
+// request has no enabled auto-merge.
+func (s *Store) PullRequestAutoMerge(ctx context.Context, repositoryID string, number int64) (PullRequestAutoMerge, bool, error) {
+	row := s.db.QueryRowContext(ctx, pullRequestAutoMergeSelect+` WHERE repository_id=? AND pull_request_number=?`, repositoryID, number)
+	record, err := scanPullRequestAutoMerge(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PullRequestAutoMerge{}, false, nil
+	}
+	return record, err == nil, err
+}
+
+// PullRequestAutoMerges lists enabled intents of one repository, or of every
+// repository when repositoryID is empty, ordered for stable processing.
+func (s *Store) PullRequestAutoMerges(ctx context.Context, repositoryID string) ([]PullRequestAutoMerge, error) {
+	query := pullRequestAutoMergeSelect
+	var args []any
+	if repositoryID != "" {
+		query += ` WHERE repository_id=?`
+		args = append(args, repositoryID)
+	}
+	query += ` ORDER BY repository_id,pull_request_number`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return collectRows(rows, scanPullRequestAutoMerge)
+}
+
+// PullRequestAutoMergesAfter returns one bounded circular page of one
+// repository's enabled intents in ascending pull request number order.
+// Advancing the cursor to the last returned number, as the caller converges
+// a page, gives every enabled request fair progress.
+func (s *Store) PullRequestAutoMergesAfter(ctx context.Context, repositoryID string, after int64, limit int) ([]PullRequestAutoMerge, bool, error) {
+	if after < 0 || limit < 1 || limit > 1000 {
+		return nil, false, errors.New("invalid pull request auto-merge page")
+	}
+	rows, err := s.db.QueryContext(ctx, pullRequestAutoMergeSelect+` WHERE repository_id=?
+		ORDER BY CASE WHEN pull_request_number>? THEN 0 ELSE 1 END,pull_request_number ASC LIMIT ?`, repositoryID, after, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	records, err := collectRows(rows, scanPullRequestAutoMerge)
+	if err != nil {
+		return nil, false, err
+	}
+	more := len(records) > limit
+	if more {
+		records = records[:limit]
+	}
+	return records, more, nil
+}
+
+// RepositoriesWithPullRequestAutoMerges lists the repository identifiers that
+// currently have an enabled intent, so a wake scan touches only repositories
+// that can have background work.
+func (s *Store) RepositoriesWithPullRequestAutoMerges(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT repository_id FROM pull_request_auto_merges ORDER BY repository_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var repositories []string
+	for rows.Next() {
+		var repositoryID string
+		if err := rows.Scan(&repositoryID); err != nil {
+			return nil, err
+		}
+		repositories = append(repositories, repositoryID)
+	}
+	return repositories, rows.Err()
+}
+
+// DeletePullRequestAutoMerge removes an enabled intent. A missing intent is
+// not an error: the caller has already established, under the repository
+// lock, whether the row should exist.
+func (s *Store) DeletePullRequestAutoMerge(ctx context.Context, repositoryID string, number int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM pull_request_auto_merges WHERE repository_id=? AND pull_request_number=?`, repositoryID, number)
+	return err
+}
+
+const pullRequestAutoMergeSelect = `SELECT repository_id,pull_request_number,enabled_at,updated_at,enabled_by FROM pull_request_auto_merges`
+
+func scanPullRequestAutoMerge(scanner rowScanner) (PullRequestAutoMerge, error) {
+	var record PullRequestAutoMerge
+	var enabledAt, updatedAt int64
+	var enabledBy string
+	if err := scanner.Scan(&record.RepositoryID, &record.PullRequestNumber, &enabledAt, &updatedAt, &enabledBy); err != nil {
+		return PullRequestAutoMerge{}, err
+	}
+	record.EnabledAt = unixTime(enabledAt)
+	record.UpdatedAt = unixTime(updatedAt)
+	var err error
+	if record.EnabledBy, err = decodeActor(enabledBy); err != nil {
+		return PullRequestAutoMerge{}, err
+	}
+	return record, nil
 }
 
 func readPullRequestRecovery(ctx context.Context, tx *sql.Tx, snapshot *RecoveryState) error {
@@ -960,7 +1132,23 @@ func readPullRequestRecovery(ctx context.Context, tx *sql.Tx, snapshot *Recovery
 		}
 		snapshot.PullRequestMergeIntents = append(snapshot.PullRequestMergeIntents, intent)
 	}
-	return closeRows(rows)
+	if err := closeRows(rows); err != nil {
+		return err
+	}
+
+	autoMergeRows, err := tx.QueryContext(ctx, pullRequestAutoMergeSelect+` ORDER BY repository_id,pull_request_number`)
+	if err != nil {
+		return err
+	}
+	for autoMergeRows.Next() {
+		record, err := scanPullRequestAutoMerge(autoMergeRows)
+		if err != nil {
+			autoMergeRows.Close()
+			return err
+		}
+		snapshot.PullRequestAutoMerges = append(snapshot.PullRequestAutoMerges, record)
+	}
+	return closeRows(autoMergeRows)
 }
 
 func restorePullRequestRecovery(ctx context.Context, tx *sql.Tx, snapshot RecoveryState) error {
@@ -994,6 +1182,15 @@ func restorePullRequestRecovery(ctx context.Context, tx *sql.Tx, snapshot Recove
 	for _, intent := range snapshot.PullRequestMergeIntents {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO pull_request_merge_intents(repository_id,pull_request_number,source_oid,target_oid,mode,tree_oid,result_oid,receipt_ref,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, intent.RepositoryID, intent.PullRequestNumber, intent.SourceOID, intent.TargetOID, intent.Mode, intent.TreeOID, intent.ResultOID, intent.ReceiptRef, intent.Status, intent.CreatedAt.Unix(), intent.UpdatedAt.Unix()); err != nil {
 			return fmt.Errorf("restore pull request merge intent: %w", err)
+		}
+	}
+	for _, intent := range snapshot.PullRequestAutoMerges {
+		enabledBy, err := encodeActor(intent.EnabledBy)
+		if err != nil {
+			return fmt.Errorf("restore pull request auto-merge %s#%d: %w", intent.RepositoryID, intent.PullRequestNumber, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO pull_request_auto_merges(repository_id,pull_request_number,enabled_at,updated_at,enabled_by) VALUES(?,?,?,?,?)`, intent.RepositoryID, intent.PullRequestNumber, intent.EnabledAt.Unix(), intent.UpdatedAt.Unix(), enabledBy); err != nil {
+			return fmt.Errorf("restore pull request auto-merge: %w", err)
 		}
 	}
 	return nil
@@ -1104,6 +1301,30 @@ func ValidatePullRequestRecovery(snapshot RecoveryState) error {
 		if !ok || intent.SourceOID != record.MergeSourceOID || intent.TargetOID != record.MergeTargetOID || intent.ResultOID != record.MergeOID || intent.ReceiptRef != record.MergeReceipt {
 			return errors.New("merged pull request does not match a completed merge intent")
 		}
+	}
+	autoMerges := make(map[string]bool, len(snapshot.PullRequestAutoMerges))
+	for _, intent := range snapshot.PullRequestAutoMerges {
+		key := pullRequestKey(intent.RepositoryID, intent.PullRequestNumber)
+		record, exists := requests[key]
+		if !exists {
+			return errors.New("auto-merge intent refers to an unknown pull request")
+		}
+		// The same transaction that closes a request or records its merge
+		// removes the intent, so a portable snapshot never carries one for a
+		// non-open request.
+		if record.Status != PullRequestOpen {
+			return errors.New("auto-merge intent belongs to a pull request that is not open")
+		}
+		if intent.PullRequestNumber <= 0 || intent.EnabledAt.IsZero() || intent.UpdatedAt.IsZero() || intent.UpdatedAt.Before(intent.EnabledAt) {
+			return errors.New("invalid auto-merge intent record")
+		}
+		if err := intent.EnabledBy.Validate(); err != nil {
+			return fmt.Errorf("invalid auto-merge intent actor: %w", err)
+		}
+		if autoMerges[key] {
+			return errors.New("duplicate auto-merge intent record")
+		}
+		autoMerges[key] = true
 	}
 	return nil
 }

@@ -257,6 +257,34 @@
 </div>
 {{end}}
 
+{{/* Automatic merge opt-in. Enabled, it shows the current waiting or blocked
+     reason with an icon and text (never color alone); disabled, it offers the
+     opt-in form. Manual merging stays available alongside it. */}}
+{{if and $actionable (or $p.AutoMerge $p.AutoMergeEnableURL $p.AutoMergeCancelURL)}}
+<div class="card pr-auto" aria-live="polite">
+  <h2 class="setblock__h">{{bi $lang "pr.auto_merge.title"}}</h2>
+  {{with $p.AutoMerge}}
+  <p class="pr-auto__state pr-auto__state--{{.Status}}" data-reason="{{.Reason}}">
+    {{if eq .Status "blocked"}}{{icon "warning"}}{{else}}{{icon "clock"}}{{end}}
+    <span>{{bi $lang .Message}}</span>
+  </p>
+  {{end}}
+  {{if $p.AutoMergeEnableURL}}
+  <form method="post" action="{{$p.AutoMergeEnableURL}}" class="pr-auto__form">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <button type="submit" class="btn">{{icon "merge"}}{{bi $lang "pr.auto_merge.enable"}}</button>
+  </form>
+  {{end}}
+  {{if $p.AutoMergeCancelURL}}
+  <form method="post" action="{{$p.AutoMergeCancelURL}}" class="pr-auto__form">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <button type="submit" class="btn btn--secondary">{{bi $lang "pr.auto_merge.cancel_button"}}</button>
+  </form>
+  {{end}}
+  <p class="f__help">{{bi $lang "pr.auto_merge.help"}}</p>
+</div>
+{{end}}
+
 {{/* Recording a review request or a skip is secondary to the decision this
      screen is for, and neither changes the evidence above. They were a
      second expanded card that restated the advisory point and the merge

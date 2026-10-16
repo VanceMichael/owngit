@@ -2218,6 +2218,27 @@ span.hm__cell { cursor: default; }
 .evfoot .ev__note { flex: 1 1 24ch; }
 .prmerge { display: contents; }
 
+/* Automatic merge opt-in and its waiting/blocked state. State is always an
+   icon plus text, never color alone, and readable in both appearances. */
+.pr-auto { display: grid; gap: 10px; }
+.pr-auto__form { display: flex; flex-wrap: wrap; gap: 8px; }
+.pr-auto__state {
+  display: flex;
+  gap: 7px;
+  align-items: start;
+  font-size: 13px;
+  max-width: 68ch;
+  margin: 0;
+  color: var(--fg-muted);
+}
+.pr-auto__state .icon { flex: none; margin-top: 1px; }
+.pr-auto__state--waiting { color: var(--fg-muted); }
+.pr-auto__state--waiting .icon { color: var(--accent); }
+.pr-auto__state--blocked { color: var(--fg); }
+.pr-auto__state--blocked .icon { color: var(--warn); }
+.prrow__auto { flex: none; gap: 4px; }
+.prrow__auto .icon { width: 13px; height: 13px; }
+
 /* The disclosure holding the qualifying facts. It is a native details element,
    so it needs no scripting and answers to Enter and Space like any other
    control. */

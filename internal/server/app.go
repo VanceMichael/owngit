@@ -174,6 +174,9 @@ type App struct {
 	Approvals *SetupApprovals
 	// WakeChecks is an advisory nonblocking reconciliation signal.
 	WakeChecks func(repositoryID string)
+	// OnCheckCompletion wakes the auto-merge convergence after a helper or a
+	// runner wrote a terminal check attempt. It must not block or run Git.
+	OnCheckCompletion func(repositoryID string)
 	// CheckRuntimeUnavailableCode and CheckRuntimeUnavailableReason expose a
 	// sanitized owner-visible startup status. Empty code means available.
 	CheckRuntimeUnavailableCode   string

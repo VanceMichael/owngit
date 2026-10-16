@@ -57,7 +57,12 @@ const (
 	// restore it, so a backup without newer records is still written in it.
 	closedPullRequestBackupVersion = 10
 	recordsBackupVersion           = 11
-	backupVersion                  = 12
+	// workflowBackupVersion added workflow runs and their check evidence.
+	workflowBackupVersion = 12
+	// autoMergeBackupVersion adds the per-pull-request auto-merge intent. A
+	// backup without one is still written in format 12.
+	autoMergeBackupVersion = 13
+	backupVersion          = autoMergeBackupVersion
 	// manifestLimit is the most a backup holds: 1 GiB of OwnGit records in
 	// its manifest, repositories not counted. Backup refuses a larger state
 	// rather than cutting it short, and restore refuses a larger file, so
@@ -86,6 +91,7 @@ type Manifest struct {
 	PullRequestRevisions       []PullRequestRevisionManifest `json:"pull_request_revisions,omitempty"`
 	PullRequestReviews         []PullRequestReviewManifest   `json:"pull_request_reviews,omitempty"`
 	PullRequestMergeIntents    []PullRequestMergeManifest    `json:"pull_request_merge_intents,omitempty"`
+	PullRequestAutoMerges      []PullRequestAutoMergeManifest `json:"pull_request_auto_merges,omitempty"`
 	Tasks                      []TaskManifest                `json:"tasks,omitempty"`
 	CheckConfigurations        []CheckConfigurationManifest  `json:"check_configurations,omitempty"`
 	CheckCycles                []CheckCycleManifest          `json:"check_cycles,omitempty"`
@@ -365,6 +371,16 @@ type PullRequestMergeManifest struct {
 	Status            string    `json:"status"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// PullRequestAutoMergeManifest is one open pull request's opt-in auto-merge
+// intent. Since format 13.
+type PullRequestAutoMergeManifest struct {
+	RepositoryID      string       `json:"repository_id"`
+	PullRequestNumber int64        `json:"pull_request_number"`
+	EnabledAt         time.Time    `json:"enabled_at"`
+	UpdatedAt         time.Time    `json:"updated_at"`
+	EnabledBy         state.Actor  `json:"enabled_by,omitzero"`
 }
 
 type pendingRestore struct {
@@ -1489,8 +1505,11 @@ func backupManifestVersion(manifest Manifest, format10Limit, limit int64) (int, 
 	if cost := counter.charged + recordsCost(reflect.ValueOf(manifest)); cost > limit {
 		return 0, fmt.Errorf("cannot back up this state: its OwnGit records take %d MiB, and a backup holds at most %d MiB of them (repositories are not counted)", (cost+1<<20-1)>>20, limit>>20)
 	}
-	if format12Content(manifest) != "" {
+	if format13Content(manifest) != "" {
 		return backupVersion, nil
+	}
+	if format12Content(manifest) != "" {
+		return workflowBackupVersion, nil
 	}
 	if format11Content(manifest) == "" && counter.written <= format10Limit {
 		return closedPullRequestBackupVersion, nil
@@ -2022,6 +2041,12 @@ func addPullRequestState(manifest *Manifest, snapshot state.RecoveryState) {
 			Status: intent.Status, CreatedAt: intent.CreatedAt, UpdatedAt: intent.UpdatedAt,
 		})
 	}
+	for _, intent := range snapshot.PullRequestAutoMerges {
+		manifest.PullRequestAutoMerges = append(manifest.PullRequestAutoMerges, PullRequestAutoMergeManifest{
+			RepositoryID: intent.RepositoryID, PullRequestNumber: intent.PullRequestNumber,
+			EnabledAt: intent.EnabledAt, UpdatedAt: intent.UpdatedAt, EnabledBy: intent.EnabledBy,
+		})
+	}
 }
 
 // addRepositoryRecords adds each repository's names and, unless it keeps
@@ -2125,6 +2150,15 @@ func format11Content(manifest Manifest) string {
 				return "an import deletion"
 			}
 		}
+	}
+	return ""
+}
+
+// format13Content names the first record in manifest that only format 13
+// holds, or returns "" when a format 12 reader could hold the backup.
+func format13Content(manifest Manifest) string {
+	if len(manifest.PullRequestAutoMerges) != 0 {
+		return "an enabled pull request auto-merge"
 	}
 	return ""
 }
@@ -2301,6 +2335,12 @@ func recoveryState(manifest Manifest) state.RecoveryState {
 			Status: intent.Status, CreatedAt: intent.CreatedAt, UpdatedAt: intent.UpdatedAt,
 		})
 	}
+	for _, intent := range manifest.PullRequestAutoMerges {
+		snapshot.PullRequestAutoMerges = append(snapshot.PullRequestAutoMerges, state.PullRequestAutoMerge{
+			RepositoryID: intent.RepositoryID, PullRequestNumber: intent.PullRequestNumber,
+			EnabledAt: intent.EnabledAt, UpdatedAt: intent.UpdatedAt, EnabledBy: intent.EnabledBy,
+		})
+	}
 	for _, task := range manifest.Tasks {
 		snapshot.Tasks = append(snapshot.Tasks, state.RecoveryTask{
 			ID: task.ID, RepositoryID: task.RepositoryID, Title: task.Title,
@@ -2392,12 +2432,13 @@ func recoveryState(manifest Manifest) state.RecoveryState {
 func validateBackupVersion(version int) error {
 	switch {
 	case version == legacyBackupVersion || version == pullRequestBackupVersion || version == checkBackupVersion ||
-		version == closedPullRequestBackupVersion || version == recordsBackupVersion || version == backupVersion:
+		version == closedPullRequestBackupVersion || version == recordsBackupVersion ||
+		version == workflowBackupVersion || version == autoMergeBackupVersion:
 		return nil
 	case version > backupVersion:
-		return fmt.Errorf("unsupported backup version %d: this build supports versions 1, 2, %d, %d, %d, and %d", version, checkBackupVersion, closedPullRequestBackupVersion, recordsBackupVersion, backupVersion)
+		return fmt.Errorf("unsupported backup version %d: this build supports versions 1, 2, %d, %d, %d, %d, and %d", version, checkBackupVersion, closedPullRequestBackupVersion, recordsBackupVersion, workflowBackupVersion, backupVersion)
 	default:
-		return fmt.Errorf("backup uses the unreleased development format %d; this build supports versions 1, 2, %d, %d, %d, and %d", version, checkBackupVersion, closedPullRequestBackupVersion, recordsBackupVersion, backupVersion)
+		return fmt.Errorf("backup uses the unreleased development format %d; this build supports versions 1, 2, %d, %d, %d, %d, and %d", version, checkBackupVersion, closedPullRequestBackupVersion, recordsBackupVersion, workflowBackupVersion, backupVersion)
 	}
 }
 
@@ -2473,13 +2514,18 @@ func validateManifest(manifest Manifest) error {
 		bundles[item.Bundle] = true
 	}
 	if manifest.Version == legacyBackupVersion {
-		if len(manifest.PullRequests) != 0 || len(manifest.PullRequestRevisions) != 0 || len(manifest.PullRequestReviews) != 0 || len(manifest.PullRequestMergeIntents) != 0 {
+		if len(manifest.PullRequests) != 0 || len(manifest.PullRequestRevisions) != 0 || len(manifest.PullRequestReviews) != 0 || len(manifest.PullRequestMergeIntents) != 0 || len(manifest.PullRequestAutoMerges) != 0 {
 			return errors.New("version 1 backup contains unsupported pull request metadata")
 		}
 	}
-	if manifest.Version < backupVersion {
+	if manifest.Version < autoMergeBackupVersion {
+		if content := format13Content(manifest); content != "" {
+			return fmt.Errorf("version %d backup contains %s, which only version %d holds", manifest.Version, content, autoMergeBackupVersion)
+		}
+	}
+	if manifest.Version < workflowBackupVersion {
 		if content := format12Content(manifest); content != "" {
-			return fmt.Errorf("version %d backup contains %s, which only version %d holds", manifest.Version, content, backupVersion)
+			return fmt.Errorf("version %d backup contains %s, which only version %d holds", manifest.Version, content, workflowBackupVersion)
 		}
 	}
 	if manifest.Version < recordsBackupVersion {

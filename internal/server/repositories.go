@@ -413,6 +413,12 @@ func (app *App) handleRepositoryRoute(writer http.ResponseWriter, request *http.
 			case len(parts) == 4 && (parts[3] == "close" || parts[3] == "reopen") && request.Method == http.MethodPost:
 				app.handlePullRequestAction(writer, request, stored, summary, chrome, number, parts[3])
 				return
+			case len(parts) == 4 && parts[3] == "auto-merge" && request.Method == http.MethodPost:
+				app.handlePullRequestAction(writer, request, stored, summary, chrome, number, "auto_merge_enable")
+				return
+			case len(parts) == 5 && parts[3] == "auto-merge" && parts[4] == "cancel" && request.Method == http.MethodPost:
+				app.handlePullRequestAction(writer, request, stored, summary, chrome, number, "auto_merge_cancel")
+				return
 			}
 		}
 	}

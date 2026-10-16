@@ -251,6 +251,56 @@ What to know:
 - `pr list` shows 50 pull requests at a time, newest first. When more remain,
   the result has `next`; pass it as `--before` for the next page.
 
+### Automatic merge
+
+Instead of watching the page and merging by hand after checks finish, enable
+automatic merging on an open pull request. OwnGit then merges it itself once
+the current source commit's checks pass.
+
+```sh
+owngit pr auto-merge --number 1
+owngit pr auto-merge --number 1 --cancel
+```
+
+You can also enable or cancel it from the pull request page, or with the owner
+API:
+
+```sh
+curl -X POST -u owngit:PASSWORD \
+  https://owngit.example.test/api/v1/repositories/example-project/pull-requests/1/auto-merge
+curl -X POST -u owngit:PASSWORD \
+  https://owngit.example.test/api/v1/repositories/example-project/pull-requests/1/auto-merge/cancel
+```
+
+What to know:
+
+- The intent belongs to the pull request, not to a commit: it survives a push
+  to the source branch. The merge is always decided for the **current** source
+  and target commits.
+- OwnGit merges only when the latest check evidence of the current source
+  commit finished with a pass, really tested that commit from a clean worktree,
+  used the check configuration committed at that commit, and was readable.
+  Missing evidence, checks still running, a failed verdict, a dirty worktree, a
+  changed configuration, or an unreadable record shows a clear waiting or
+  blocked state on the pull request and publishes no merge.
+- With no check evidence at all for the current commit, the request keeps
+  waiting, even when no checks are configured. It merges once a helper or
+  configured check records a passing result for that commit.
+- When the source branch moves, an older pass is never reused; the request
+  waits for checks of the new commit. When the target branch moves, OwnGit
+  re-checks the current pair and its mergeability, and a conflict only waits
+  until a later ref change resolves it.
+- You can cancel at any time. Closing a pull request cancels the intent too;
+  reopening does not bring it back. If a merge was already published while a
+  cancel or close was queued, the pull request is reported as merged and is not
+  merged twice.
+- Pending intents survive a restart and backup restore. When the repository is
+  temporarily unavailable, OwnGit keeps the intent and retries on the next
+  check completion or ref change.
+- Without automatic merging, nothing changes: checks and reviews stay
+  advisory and manual `pr merge` works exactly as before, including while
+  checks fail or are still running.
+
 ## Recording checks
 
 `owngit check` (the helper) runs a project's checks on your own computer

@@ -254,6 +254,63 @@ type Eligibility struct {
 	Blockers []Blocker `json:"blockers"`
 }
 
+// Auto-merge statuses and the stable reason codes shown while an enabled
+// intent waits. Waiting is retryable: a later event converges again. Blocked
+// names a fact about the current source revision that publishing must wait
+// past; a new check result or a source push re-evaluates it.
+const (
+	AutoMergeWaiting = "waiting"
+	AutoMergeBlocked = "blocked"
+)
+
+const (
+	// AutoMergeWaitingChecks: the current source commit has no check attempt
+	// yet, or only an older revision's evidence.
+	AutoMergeWaitingChecks = "waiting_for_checks"
+	// AutoMergeChecksRunning: the current source commit's latest attempt is
+	// still pending.
+	AutoMergeChecksRunning = "checks_running"
+	// AutoMergeEvidenceUnreadable: the check configuration or evidence store
+	// could not be read; the decision retries.
+	AutoMergeEvidenceUnreadable = "evidence_unreadable"
+	// AutoMergeMergeConflict: the current pair does not merge cleanly; a ref
+	// change can resolve it, so this is waiting rather than blocked.
+	AutoMergeMergeConflict = "merge_conflict"
+	// AutoMergeRepositoryUnavailable: a Git or state read failed temporarily.
+	AutoMergeRepositoryUnavailable = "repository_unavailable"
+	// AutoMergeReconciling: every gate passed and the next convergence pass
+	// publishes the merge.
+	AutoMergeReconciling = "reconciling"
+	// AutoMergeChecksFailed: the latest terminal attempt for the current
+	// source commit did not pass.
+	AutoMergeChecksFailed = "checks_failed"
+	// AutoMergeChecksUntrustedWorktree: a passing attempt did not run against
+	// a clean worktree of the tested commit (or its cleanup failed).
+	AutoMergeChecksUntrustedWorktree = "checks_untrusted_worktree"
+	// AutoMergeChecksConfigurationChanged: the passing attempt used a check
+	// configuration that differs from the workflow committed at the source.
+	AutoMergeChecksConfigurationChanged = "checks_configuration_changed"
+)
+
+// AutoMerge is the state of one pull request's opt-in automatic merge. It is
+// present only while the pull request is open and the intent is enabled.
+type AutoMerge struct {
+	Enabled bool `json:"enabled"`
+	// Status is waiting or blocked.
+	Status string `json:"status,omitempty"`
+	// Reason is one of the stable AutoMerge* reason codes.
+	Reason string `json:"reason,omitempty"`
+	// Message is an English sentence for the reason; browser surfaces
+	// localize stable codes themselves.
+	Message string `json:"message,omitempty"`
+	// SourceOID and TargetOID are the current heads this state was evaluated
+	// against.
+	SourceOID string    `json:"source_oid,omitempty"`
+	TargetOID string    `json:"target_oid,omitempty"`
+	EnabledAt time.Time    `json:"enabled_at,omitempty"`
+	EnabledBy *state.Actor `json:"enabled_by,omitempty"`
+}
+
 // ExistingPullRequest is the detail of a pull_request_exists problem: the open
 // pull request that already covers the requested branch pair.
 type ExistingPullRequest struct {
@@ -288,8 +345,11 @@ type View struct {
 	Checks           Checks       `json:"checks"`
 	MergeEligibility Eligibility  `json:"merge_eligibility"`
 	Merge            *MergeResult `json:"merge,omitempty"`
-	CreatedAt        time.Time    `json:"created_at"`
-	UpdatedAt        time.Time    `json:"updated_at"`
+	// AutoMerge is present only while an automatic merge is enabled for an
+	// open pull request.
+	AutoMerge *AutoMerge `json:"auto_merge,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 	// CreatedBy, EditedBy and MergedBy name the access that made each change,
 	// when OwnGit recorded it.
 	CreatedBy *state.Actor `json:"created_by,omitempty"`

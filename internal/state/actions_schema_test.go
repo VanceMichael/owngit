@@ -38,9 +38,9 @@ func TestActionsSchemaUpgrade(t *testing.T) {
 				if store != nil {
 					store.Close()
 				}
-				if err == nil || !strings.Contains(err.Error(), "apply state schema migration 17") {
-					t.Fatalf("failed migration=%v", err)
-				}
+				if err == nil || !strings.Contains(err.Error(), "apply state schema migration 18") {
+				t.Fatalf("failed migration=%v", err)
+			}
 				db = openSchemaDatabase(t, filepath.Join(directory, databaseName))
 				defer db.Close()
 				afterFingerprint, _, err := schemaFingerprint(ctx, db)
@@ -218,8 +218,8 @@ func TestReleasedReaderRefusesActionsSchemaUnchanged(t *testing.T) {
 	if store != nil {
 		store.Close()
 	}
-	if err == nil || !strings.Contains(err.Error(), "schema version 17 is newer") {
-		t.Fatalf("schema-16 reader=%v", err)
+	if err == nil || !strings.Contains(err.Error(), "schema version 18 is newer") {
+		t.Fatalf("schema-17 reader=%v", err)
 	}
 	assertSchemaDirectoryUnchanged(t, directory, before)
 }

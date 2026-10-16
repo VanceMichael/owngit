@@ -54,9 +54,36 @@ func prCommand(arguments []string) error {
 		return prMerge(arguments[1:])
 	case "close", "reopen":
 		return prSetClosed(arguments[0], arguments[1:])
+	case "auto-merge":
+		return prAutoMerge(arguments[1:])
 	default:
 		return cliProblem("invalid_arguments", "Unknown pr command: "+arguments[0])
 	}
+}
+
+// prAutoMerge enables automatic merging for an open pull request, or cancels
+// the intent with --cancel. OwnGit then merges the request itself once the
+// checks of its current source commit pass and the current pair merges.
+func prAutoMerge(arguments []string) error {
+	flags := newCommandFlagSet("pr auto-merge")
+	remote := addGeneralRemoteFlags(flags, true)
+	number := flags.Int64("number", 0, "pull request number")
+	cancel := flags.Bool("cancel", false, "cancel an enabled automatic merge")
+	if err := parseFlagsWithoutOperands(flags, arguments); err != nil {
+		return err
+	}
+	if *number <= 0 {
+		return cliProblem("invalid_arguments", "pr auto-merge requires --number.")
+	}
+	connection, err := remote.connection()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	if *cancel {
+		return writeResult(cancelPullRequestAutoMerge(ctx, connection, *number))
+	}
+	return writeResult(enablePullRequestAutoMerge(ctx, connection, *number))
 }
 
 func prCreate(arguments []string) error {
@@ -518,7 +545,8 @@ func writeStructuredCommandError(writer io.Writer, err error) bool {
 }
 
 func printPRUsage(writer io.Writer) {
-	fmt.Fprintln(writer, "Usage: owngit pr <create|list|show|edit|diff|review|mergeability|merge|close|reopen> [options]")
+	fmt.Fprintln(writer, "Usage: owngit pr <create|list|show|edit|diff|review|mergeability|merge|close|reopen|auto-merge> [options]")
 	fmt.Fprintln(writer, "Inside a clone of an OwnGit repository, --server and --repository default to its origin remote. HTTP also requires --accept-insecure-http.")
 	fmt.Fprintln(writer, "pr list shows the newest pull requests first, one page at a time. When more remain, the result has \"next\"; pass it as --before for the following page.")
+	fmt.Fprintln(writer, "pr auto-merge --number N enables automatic merging once the current source commit's checks pass; --cancel cancels it.")
 }

@@ -213,6 +213,9 @@ func (app *App) completeAttempt(writer http.ResponseWriter, request *http.Reques
 	if _, err := app.Store.PruneCheckLogs(request.Context(), app.now()); err != nil {
 		log.Printf("could not prune expired check logs: %s", logtext.Cause(err))
 	}
+	if app.OnCheckCompletion != nil {
+		app.OnCheckCompletion(repositoryID)
+	}
 	writeAPIJSON(writer, http.StatusOK, checkapi.TaskResponse{OK: true, Task: taskJSON(task), Attempt: app.attemptJSON(request, stored)})
 }
 

@@ -103,8 +103,52 @@ func (app *App) pullRequestRow(address string, view *pullrequest.View) webui.Pul
 		Target:    browserRevision(view.Target),
 		Checks:    browserCheckEvidence(address, view.Checks),
 		Review:    browserReviewEvidence(view.Review, view.Source, view.Target),
+		AutoMerge: view.AutoMerge != nil,
 		CreatedAt: view.CreatedAt,
 		UpdatedAt: view.UpdatedAt,
+	}
+}
+
+// browserAutoMerge maps the API auto-merge projection to the page panel.
+func browserAutoMerge(autoMerge *pullrequest.AutoMerge) *webui.AutoMergePanel {
+	if autoMerge == nil || !autoMerge.Enabled {
+		return nil
+	}
+	messages := map[string]webui.MessageCode{
+		pullrequest.AutoMergeWaitingChecks:              webui.MsgAutoMergeWaitingChecks,
+		pullrequest.AutoMergeChecksRunning:              webui.MsgAutoMergeChecksRunning,
+		pullrequest.AutoMergeEvidenceUnreadable:         webui.MsgAutoMergeEvidenceUnreadable,
+		pullrequest.AutoMergeMergeConflict:              webui.MsgAutoMergeMergeConflict,
+		pullrequest.AutoMergeRepositoryUnavailable:      webui.MsgAutoMergeRepositoryUnavailable,
+		pullrequest.AutoMergeReconciling:                webui.MsgAutoMergeReconciling,
+		pullrequest.AutoMergeChecksFailed:               webui.MsgAutoMergeChecksFailed,
+		pullrequest.AutoMergeChecksUntrustedWorktree:    webui.MsgAutoMergeChecksUntrustedWorktree,
+		pullrequest.AutoMergeChecksConfigurationChanged: webui.MsgAutoMergeChecksConfigurationChanged,
+	}
+	message, ok := messages[autoMerge.Reason]
+	if !ok {
+		// Git/state blockers reuse the merge blocker sentences.
+		message = autoMergeBlockerMessage(autoMerge.Reason)
+	}
+	return &webui.AutoMergePanel{Status: autoMerge.Status, Reason: autoMerge.Reason, Message: message}
+}
+
+// autoMergeBlockerMessage maps the Git/state blocker reasons the projection
+// reuses to their localized merge blocker sentences.
+func autoMergeBlockerMessage(code string) webui.MessageCode {
+	switch code {
+	case "source_branch_missing":
+		return webui.MsgMergeBlockedSourceGone
+	case "source_not_commit":
+		return webui.MsgMergeBlockedSourceKind
+	case "target_branch_missing":
+		return webui.MsgMergeBlockedTargetGone
+	case "target_not_commit":
+		return webui.MsgMergeBlockedTargetKind
+	case "already_merged":
+		return webui.MsgPRMergedFixed
+	default:
+		return webui.MsgMergeUnexplained
 	}
 }
 
@@ -347,6 +391,12 @@ func (app *App) handlePullRequestAction(writer http.ResponseWriter, request *htt
 	case "reopen":
 		view, err = app.PullRequests.Reopen(request.Context(), stored.ID, number)
 		notice = "pull_request_reopened"
+	case "auto_merge_enable":
+		view, err = app.PullRequests.EnableAutoMerge(request.Context(), stored.ID, number, generalAccessActor)
+		notice = "auto_merge_enabled"
+	case "auto_merge_cancel":
+		view, err = app.PullRequests.CancelAutoMerge(request.Context(), stored.ID, number)
+		notice = "auto_merge_canceled"
 	default:
 		app.renderError(writer, request, http.StatusNotFound, webui.MsgErrNotFound, request.URL.Path)
 		return
@@ -464,6 +514,12 @@ func (app *App) renderPullRequest(writer http.ResponseWriter, request *http.Requ
 	switch view.State {
 	case state.PullRequestOpen:
 		page.CloseURL = self + "/close"
+		page.AutoMerge = browserAutoMerge(view.AutoMerge)
+		if view.AutoMerge != nil {
+			page.AutoMergeCancelURL = self + "/auto-merge/cancel"
+		} else {
+			page.AutoMergeEnableURL = self + "/auto-merge"
+		}
 	case state.PullRequestClosed:
 		page.ReopenURL = self + "/reopen"
 	}
@@ -508,6 +564,10 @@ func pullRequestNotices(key string, view *pullrequest.View) []webui.Notice {
 		confirmed, code = view.State == state.PullRequestClosed, webui.MsgPRClosedDone
 	case "pull_request_reopened":
 		confirmed, code = open, webui.MsgPRReopenedDone
+	case "auto_merge_enabled":
+		confirmed, code = open && view.AutoMerge != nil, webui.MsgAutoMergeEnabled
+	case "auto_merge_canceled":
+		confirmed, code = open && view.AutoMerge == nil, webui.MsgAutoMergeCanceled
 	case "pull_request_edited":
 		confirmed, code = view.EditedAt != nil, webui.MsgPREditSaved
 	case "review_recorded":
@@ -719,6 +779,8 @@ func browserPullRequestProblem(request *http.Request, step string, err error, ac
 		code = webui.MsgStorageChanged
 	case "pull_request_exists":
 		code = webui.MsgPRAlreadyOpen
+	case "auto_merge_not_enabled":
+		code = webui.MsgAutoMergeNotEnabled
 	case "pull_request_merged":
 		code = webui.MsgPRMergedFixed
 	case "same_branch":

@@ -256,6 +256,25 @@ func (app *App) handleAPI(writer http.ResponseWriter, request *http.Request, set
 		if err == nil {
 			result = pullrequest.SuccessEnvelope{OK: true, PullRequest: view}
 		}
+	case "auto-merge", "auto_merge_cancel":
+		if request.Method != http.MethodPost {
+			writeAPIMethodError(writer, http.MethodPost)
+			return
+		}
+		// The body is an empty JSON object, like close and reopen.
+		var input struct{}
+		if !decodeAPIJSON(writer, request, &input) {
+			return
+		}
+		var view *pullrequest.View
+		if operation == "auto-merge" {
+			view, err = app.PullRequests.EnableAutoMerge(request.Context(), repositoryID, number, generalAccessActor)
+		} else {
+			view, err = app.PullRequests.CancelAutoMerge(request.Context(), repositoryID, number)
+		}
+		if err == nil {
+			result = pullrequest.SuccessEnvelope{OK: true, PullRequest: view}
+		}
 	case "edit":
 		if request.Method != http.MethodPost {
 			writeAPIMethodError(writer, http.MethodPost)
@@ -422,7 +441,7 @@ func parsePullRequestAPIRoute(requestPath string) (int64, string, bool) {
 	if len(parts) == 3 {
 		return number, "show", true
 	}
-	if len(parts) == 4 && (parts[3] == "merge" || parts[3] == "close" || parts[3] == "reopen" || parts[3] == "diff" || parts[3] == "edit" || parts[3] == "mergeability") {
+	if len(parts) == 4 && (parts[3] == "merge" || parts[3] == "close" || parts[3] == "reopen" || parts[3] == "diff" || parts[3] == "edit" || parts[3] == "mergeability" || parts[3] == "auto-merge") {
 		return number, parts[3], true
 	}
 	if len(parts) == 5 && parts[3] == "review" {
@@ -434,6 +453,9 @@ func parsePullRequestAPIRoute(requestPath string) (int64, string, bool) {
 		case "skip":
 			return number, "review_skip", true
 		}
+	}
+	if len(parts) == 5 && parts[3] == "auto-merge" && parts[4] == "cancel" {
+		return number, "auto_merge_cancel", true
 	}
 	return 0, "", false
 }
@@ -556,7 +578,8 @@ func apiStatus(request *http.Request, step string, err error) int {
 	case "repository_not_found", "pull_request_not_found", "task_not_found", "configuration_not_found", "attempt_not_found", "log_not_recorded", "cycle_not_found":
 		return http.StatusNotFound
 	case "stale_revision", "stale_edit", "merge_conflict", "merge_blocked", "pull_request_not_open", "pull_request_exists", "pull_request_merged", "git_update_failed",
-		"source_branch_missing", "target_branch_missing", "source_not_commit", "target_not_commit", "credential_not_found", "attempt_conflict", "cycle_conflict", "correction_budget_exhausted":
+		"source_branch_missing", "target_branch_missing", "source_not_commit", "target_not_commit", "credential_not_found", "attempt_conflict", "cycle_conflict", "correction_budget_exhausted",
+		"auto_merge_not_enabled":
 		return http.StatusConflict
 	case "helper_authentication_required", "invalid_helper_credential", "admin_authentication_required", "invalid_admin_credentials", "admin_password_required":
 		return http.StatusUnauthorized

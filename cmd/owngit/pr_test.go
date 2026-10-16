@@ -74,6 +74,8 @@ func TestPRCommandsUseRemoteJSONAPIAndPrivatePasswordFile(t *testing.T) {
 		{"review skip", append([]string{"review", "skip", "--number", "1", "--source-oid", strings.Repeat("a", 40), "--target-oid", strings.Repeat("b", 40)}, remote...), http.MethodPost, "/api/v1/repositories/project/pull-requests/1/review/skip", "source_oid"},
 		{"mergeability", append([]string{"mergeability", "--number", "1"}, remote...), http.MethodGet, "/api/v1/repositories/project/pull-requests/1/mergeability", ""},
 		{"merge", append([]string{"merge", "--number", "1", "--source-oid", strings.Repeat("a", 40), "--target-oid", strings.Repeat("b", 40)}, remote...), http.MethodPost, "/api/v1/repositories/project/pull-requests/1/merge", "source_oid"},
+		{"auto-merge", append([]string{"auto-merge", "--number", "1"}, remote...), http.MethodPost, "/api/v1/repositories/project/pull-requests/1/auto-merge", ""},
+		{"auto-merge cancel", append([]string{"auto-merge", "--number", "1", "--cancel"}, remote...), http.MethodPost, "/api/v1/repositories/project/pull-requests/1/auto-merge/cancel", ""},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

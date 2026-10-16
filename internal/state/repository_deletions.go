@@ -133,6 +133,7 @@ var repositoryDeletionStatements = []string{
 	`DELETE FROM check_runner_credentials WHERE repository_id=?`,
 	`DELETE FROM check_observations WHERE repository_id=?`,
 	`DELETE FROM helper_credentials WHERE repository_id=?`,
+	`DELETE FROM pull_request_auto_merges WHERE repository_id=?`,
 	`DELETE FROM pull_request_merge_intents WHERE repository_id=?`,
 	`DELETE FROM pull_request_reviews WHERE repository_id=?`,
 	`DELETE FROM pull_request_revisions WHERE repository_id=?`,

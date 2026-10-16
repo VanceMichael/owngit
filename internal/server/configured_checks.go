@@ -456,6 +456,9 @@ func (app *App) handleRunnerAPI(writer http.ResponseWriter, request *http.Reques
 			writeRunnerError(writer, request, err)
 			return
 		}
+		if app.OnCheckCompletion != nil {
+			app.OnCheckCompletion(repositoryID)
+		}
 		writeAPIJSON(writer, http.StatusOK, checkapi.TaskResponse{OK: true, Task: taskJSON(task), Attempt: app.attemptJSON(request, attempt)})
 	case "unavailable":
 		var input checkapi.RunnerUnavailableInput
@@ -470,6 +473,9 @@ func (app *App) handleRunnerAPI(writer http.ResponseWriter, request *http.Reques
 		if err != nil {
 			writeRunnerError(writer, request, err)
 			return
+		}
+		if app.OnCheckCompletion != nil {
+			app.OnCheckCompletion(repositoryID)
 		}
 		writeAPIJSON(writer, http.StatusOK, checkapi.JobResponse{OK: true, Job: jobJSON(job, nil)})
 	default:

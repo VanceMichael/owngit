@@ -698,6 +698,8 @@ type schemaStep struct {
 // fields of 1.1.3: pull request text and actors, repository names and
 // policies, import options, share links, scheduled backups, recent pushes,
 // and the start time of each raw check log for its cleanup.
+// Version 17 rebuilds the check attempt and job tables for runner support,
+// and version 18 records the per-pull-request opt-in auto-merge intent.
 // The 1.0.0 to 1.0.2 releases wrote schema 14, and 1.0.3 to 1.1.2 wrote
 // schema 15.
 // Schema 12 has no ownership rows. A missing row never authorizes removal or
@@ -1756,6 +1758,17 @@ var schemaSteps = []schemaStep{
 			FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX actions_schedules_due ON actions_schedules(next_due_at)`,
+	}},
+	{version: 18, statements: []string{
+		`CREATE TABLE pull_request_auto_merges (
+			repository_id TEXT NOT NULL,
+			pull_request_number INTEGER NOT NULL CHECK (pull_request_number > 0),
+			enabled_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			enabled_by TEXT NOT NULL DEFAULT '' CHECK (enabled_by = '' OR (json_valid(enabled_by) AND length(CAST(enabled_by AS BLOB)) <= 1024)),
+			PRIMARY KEY (repository_id, pull_request_number),
+			FOREIGN KEY (repository_id, pull_request_number) REFERENCES pull_requests(repository_id, number) ON DELETE CASCADE
+		)`,
 	}},
 }
 

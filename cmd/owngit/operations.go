@@ -248,6 +248,22 @@ func setPullRequestClosed(ctx context.Context, target connection, number int64, 
 	return target.client().Do(ctx, http.MethodPost, target.pullRequestPath(number)+action, struct{}{})
 }
 
+// enablePullRequestAutoMerge opts an open pull request into automatic merging.
+func enablePullRequestAutoMerge(ctx context.Context, target connection, number int64) ([]byte, error) {
+	if err := requirePullRequestNumber(number); err != nil {
+		return nil, err
+	}
+	return target.client().Do(ctx, http.MethodPost, target.pullRequestPath(number)+"/auto-merge", struct{}{})
+}
+
+// cancelPullRequestAutoMerge removes an enabled automatic merge intent.
+func cancelPullRequestAutoMerge(ctx context.Context, target connection, number int64) ([]byte, error) {
+	if err := requirePullRequestNumber(number); err != nil {
+		return nil, err
+	}
+	return target.client().Do(ctx, http.MethodPost, target.pullRequestPath(number)+"/auto-merge/cancel", struct{}{})
+}
+
 func requirePullRequestNumber(number int64) error {
 	if number <= 0 {
 		return cliProblem("invalid_arguments", "The pull request number must be positive.")

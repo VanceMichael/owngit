@@ -32,6 +32,10 @@ type Service struct {
 	// OnChange wakes advisory check reconciliation. It must not block or run
 	// repository commands because mutations may still hold the repository lock.
 	OnChange func(string)
+	// beforeAutoMergePublish, when set, runs inside an automatic merge's lock
+	// hold immediately before the Git publication. Production leaves it nil;
+	// tests use it as a deterministic publication fence.
+	beforeAutoMergePublish func(repositoryID string, number int64)
 }
 
 func (service *Service) Create(ctx context.Context, input CreateInput) (*View, error) {
@@ -135,13 +139,13 @@ func (service *Service) createForHeadsLocked(ctx context.Context, repositoryPath
 		if !activated {
 			return nil, err
 		}
-		return service.viewForHeads(ctx, repositoryPath, reconciled, sourceHead, targetHead)
+		return service.viewForHeads(ctx, repositoryPath, reconciled, sourceHead, targetHead, false)
 	}
 	record, err = service.Store.ActivatePullRequestCreation(ctx, creation.RepositoryID, record.Number, service.now())
 	if err != nil {
 		return nil, &Problem{Code: "pull_request_creation_reconciliation_pending", Message: "The pull request revision was retained, but its visible state still needs reconciliation.", Cause: err}
 	}
-	return service.viewForHeads(ctx, repositoryPath, record, sourceHead, targetHead)
+	return service.viewForHeads(ctx, repositoryPath, record, sourceHead, targetHead, false)
 }
 
 func (service *Service) reconcileProvisionalCreationLocked(ctx context.Context, repositoryPath string, record state.PullRequest, readRef refReader) (state.PullRequest, bool, error) {
@@ -240,7 +244,7 @@ func (service *Service) Show(ctx context.Context, repositoryID string, number in
 	if err != nil {
 		return nil, err
 	}
-	return service.readViewLocked(ctx, repositoryPath, record)
+	return service.readViewLocked(ctx, repositoryPath, record, true)
 }
 
 // Edit replaces the title, the description, or both, when the pull request
@@ -300,7 +304,7 @@ func (service *Service) Edit(ctx context.Context, repositoryID string, number in
 		}
 		record = edited
 	}
-	return service.readViewLocked(ctx, repositoryPath, record)
+	return service.readViewLocked(ctx, repositoryPath, record, false)
 }
 
 func (service *Service) RequestReview(ctx context.Context, repositoryID string, number int64, input RevisionInput) (*View, error) {
@@ -377,7 +381,7 @@ func (service *Service) recordReview(ctx context.Context, repositoryID string, n
 	if err != nil {
 		return nil, err
 	}
-	return service.viewForHeads(ctx, repositoryPath, record, sourceHead, targetHead)
+	return service.viewForHeads(ctx, repositoryPath, record, sourceHead, targetHead, false)
 }
 
 func (service *Service) Merge(ctx context.Context, repositoryID string, number int64, input RevisionInput) (*View, error) {
@@ -424,7 +428,7 @@ func (service *Service) Merge(ctx context.Context, repositoryID string, number i
 		if !published {
 			return nil, NewProblem("repository_integrity_error", "The merged pull request receipt is missing.")
 		}
-		return service.readViewLocked(ctx, repositoryPath, record)
+		return service.readViewLocked(ctx, repositoryPath, record, false)
 	}
 	if record.Status != state.PullRequestOpen {
 		return nil, notOpenProblem(record.Status)
@@ -437,10 +441,36 @@ func (service *Service) Merge(ctx context.Context, repositoryID string, number i
 	if sourceHead.OID != input.SourceOID || targetHead.OID != input.TargetOID {
 		return nil, staleRevisionProblem(sourceHead.OID, targetHead.OID)
 	}
+	return service.mergeCurrentPairLocked(ctx, repositoryPath, record, sourceHead, targetHead, mergeOptions{actor: input.Actor})
+}
+
+// mergeOptions carries the caller identity and the optional guard of the
+// background auto-merge path. Manual merges leave requireIntent nil.
+type mergeOptions struct {
+	actor state.Actor
+	// requireIntent is checked after the merge gate and again immediately
+	// before publication, both while the repository write lock is held. A
+	// false answer aborts the merge without publishing anything.
+	requireIntent func() (bool, error)
+}
+
+// errAutoMergeAborted marks an auto-merge that reached the merge machinery
+// but whose intent disappeared before publication. The caller published
+// nothing and reports no failure.
+var errAutoMergeAborted = NewProblem("auto_merge_aborted", "The automatic merge was canceled before publication.")
+
+// mergeCurrentPairLocked binds the current pair, plans it, publishes the merge
+// transaction and reconciles its receipt. The caller holds the repository
+// write lock and has already established that the request is open and that
+// the heads are the revision this merge acts on. Manual and automatic merges
+// share every step so both produce one identical, idempotent receipt.
+func (service *Service) mergeCurrentPairLocked(ctx context.Context, repositoryPath string, record state.PullRequest, sourceHead, targetHead branchHead, options mergeOptions) (*View, error) {
+	number := record.Number
+	input := RevisionInput{SourceOID: sourceHead.OID, TargetOID: targetHead.OID, Actor: options.actor}
 	if err := service.bindRevision(ctx, repositoryPath, record, input.SourceOID, input.TargetOID); err != nil {
 		return nil, err
 	}
-	view, err := service.viewForHeads(ctx, repositoryPath, record, sourceHead, targetHead)
+	view, err := service.viewForHeads(ctx, repositoryPath, record, sourceHead, targetHead, false)
 	if err != nil {
 		return nil, err
 	}
@@ -448,16 +478,26 @@ func (service *Service) Merge(ctx context.Context, repositoryID string, number i
 		return nil, &Problem{Code: "merge_blocked", Message: "The pull request is not eligible to merge.", Details: view.MergeEligibility}
 	}
 
+	if options.requireIntent != nil {
+		enabled, err := options.requireIntent()
+		if err != nil {
+			return nil, err
+		}
+		if !enabled {
+			return nil, errAutoMergeAborted
+		}
+	}
+
 	if err := service.discardSupersededMergePlansLocked(ctx, repositoryPath, record, input); err != nil {
 		return nil, err
 	}
-	intent, exists, err := service.Store.PullRequestMergeIntent(ctx, repositoryID, number, input.SourceOID, input.TargetOID)
+	intent, exists, err := service.Store.PullRequestMergeIntent(ctx, record.RepositoryID, number, input.SourceOID, input.TargetOID)
 	if err != nil {
 		return nil, &Problem{Code: "state_unavailable", Message: "The durable merge intent could not be read.", Cause: err}
 	}
 	if !exists {
 		intent = state.PullRequestMergeIntent{
-			RepositoryID: repositoryID, PullRequestNumber: number, SourceOID: input.SourceOID, TargetOID: input.TargetOID,
+			RepositoryID: record.RepositoryID, PullRequestNumber: number, SourceOID: input.SourceOID, TargetOID: input.TargetOID,
 			ReceiptRef: MergeReceiptRef(number), CreatedAt: service.now(), Status: state.MergeIntentPreparing,
 		}
 	}
@@ -467,11 +507,11 @@ func (service *Service) Merge(ctx context.Context, repositoryID string, number i
 			return nil, reconcileErr
 		}
 		if published {
-			record, err = service.requirePullRequest(ctx, repositoryID, number)
+			record, err = service.requirePullRequest(ctx, record.RepositoryID, number)
 			if err != nil {
 				return nil, err
 			}
-			return service.readViewLocked(ctx, repositoryPath, record)
+			return service.readViewLocked(ctx, repositoryPath, record, false)
 		}
 	}
 	if err := service.requireMergeCapability(ctx); err != nil {
@@ -516,6 +556,25 @@ func (service *Service) Merge(ctx context.Context, repositoryID string, number i
 		return nil, NewProblem("repository_integrity_error", "The merge intent is in an unexpected state.")
 	}
 
+	// The last word before the Git transaction belongs to the durable
+	// auto-merge intent, re-read under the same write lock the cancel and
+	// close paths take.
+	if options.requireIntent != nil {
+		enabled, err := options.requireIntent()
+		if err != nil {
+			return nil, err
+		}
+		if service.beforeAutoMergePublish != nil {
+			service.beforeAutoMergePublish(record.RepositoryID, number)
+		}
+		if !enabled {
+			if discardErr := service.discardUnpublishedMergePlansLocked(ctx, repositoryPath, record, nil); discardErr != nil {
+				return nil, discardErr
+			}
+			return nil, errAutoMergeAborted
+		}
+	}
+
 	publishErr := service.publishMerge(ctx, repositoryPath, record, intent)
 	published, reconcileErr := service.reconcileIntentLocked(ctx, repositoryPath, intent, input.Actor)
 	if reconcileErr != nil {
@@ -531,11 +590,11 @@ func (service *Service) Merge(ctx context.Context, repositoryID string, number i
 		}
 		return nil, &Problem{Code: "git_update_failed", Message: "Git did not publish the merge transaction.", Cause: publishErr}
 	}
-	record, err = service.requirePullRequest(ctx, repositoryID, number)
+	record, err = service.requirePullRequest(ctx, record.RepositoryID, number)
 	if err != nil {
 		return nil, err
 	}
-	return service.readViewLocked(ctx, repositoryPath, record)
+	return service.readViewLocked(ctx, repositoryPath, record, false)
 }
 
 // Close closes an open pull request without merging it. It stays in the
@@ -583,7 +642,7 @@ func (service *Service) setClosed(ctx context.Context, repositoryID string, numb
 	}
 	switch record.Status {
 	case wanted:
-		return service.readViewLocked(ctx, repositoryPath, record)
+		return service.readViewLocked(ctx, repositoryPath, record, false)
 	case state.PullRequestMerged:
 		return nil, NewProblem("pull_request_merged", "A merged pull request cannot be closed or reopened.")
 	case from:
@@ -602,7 +661,15 @@ func (service *Service) setClosed(ctx context.Context, repositoryID string, numb
 	if err != nil {
 		return nil, &Problem{Code: "state_unavailable", Message: "The pull request state could not be saved.", Cause: err}
 	}
-	return service.readViewLocked(ctx, repositoryPath, record)
+	// A close canceled any auto-merge intent in the same state change; plans
+	// the intent prepared but never published are abandoned with it. A reopen
+	// restores neither.
+	if closed {
+		if err := service.discardUnpublishedMergePlansLocked(ctx, repositoryPath, record, nil); err != nil {
+			return nil, err
+		}
+	}
+	return service.readViewLocked(ctx, repositoryPath, record, false)
 }
 
 // completePublishedMergeLocked records a merge of this pull request that Git
@@ -851,6 +918,15 @@ func (service *Service) validateReceipt(ctx context.Context, repositoryPath stri
 }
 
 func (service *Service) discardSupersededMergePlansLocked(ctx context.Context, repositoryPath string, record state.PullRequest, revision RevisionInput) error {
+	return service.discardUnpublishedMergePlansLocked(ctx, repositoryPath, record, &revision)
+}
+
+// discardUnpublishedMergePlansLocked abandons the pull request's merge plans
+// that published no receipt. With keep set it preserves one revision's plan
+// (the merge in progress); with keep nil it discards every plan (an
+// auto-merge cancel or close). Callers must have completed or refused a
+// published receipt under the lock before this runs.
+func (service *Service) discardUnpublishedMergePlansLocked(ctx context.Context, repositoryPath string, record state.PullRequest, keep *RevisionInput) error {
 	receiptOID, exists, err := service.readRef(ctx, repositoryPath, MergeReceiptRef(record.Number))
 	if err != nil {
 		return err
@@ -866,7 +942,10 @@ func (service *Service) discardSupersededMergePlansLocked(ctx context.Context, r
 		return NewProblem("merge_reconciliation_pending", "The published merge still needs reconciliation. Retry after the repository is available.")
 	}
 	for _, intent := range intents {
-		if intent.RepositoryID != record.RepositoryID || intent.PullRequestNumber != record.Number || (intent.SourceOID == revision.SourceOID && intent.TargetOID == revision.TargetOID) {
+		if intent.RepositoryID != record.RepositoryID || intent.PullRequestNumber != record.Number {
+			continue
+		}
+		if keep != nil && intent.SourceOID == keep.SourceOID && intent.TargetOID == keep.TargetOID {
 			continue
 		}
 		if intent.Status != state.MergeIntentPreparing {
@@ -884,7 +963,7 @@ func (service *Service) discardSupersededMergePlansLocked(ctx context.Context, r
 // readViewLocked builds a view from the current heads without retaining a new
 // revision pair. Callers that record a decision or a merge bind the pair
 // explicitly, so passive reads stay read-only.
-func (service *Service) readViewLocked(ctx context.Context, repositoryPath string, record state.PullRequest) (*View, error) {
+func (service *Service) readViewLocked(ctx context.Context, repositoryPath string, record state.PullRequest, deepAutoMerge bool) (*View, error) {
 	var heads map[string]branchHead
 	if record.Status != state.PullRequestMerged {
 		var err error
@@ -893,7 +972,7 @@ func (service *Service) readViewLocked(ctx context.Context, repositoryPath strin
 		}
 	}
 	source, target := recordHeads(record, heads)
-	return service.viewForHeads(ctx, repositoryPath, record, source, target)
+	return service.viewForHeads(ctx, repositoryPath, record, source, target, deepAutoMerge)
 }
 
 // recordHeads returns the pair a pull request is about: its current branch
@@ -908,11 +987,23 @@ func recordHeads(record state.PullRequest, heads map[string]branchHead) (branchH
 }
 
 // viewForHeads is the whole view of a pull request at source and target:
-// its summary with the description and the newest review notes.
-func (service *Service) viewForHeads(ctx context.Context, repositoryPath string, record state.PullRequest, source, target branchHead) (*View, error) {
+// its summary with the description and the newest review notes. The shallow
+// auto-merge projection is attached while the summary is built; when
+// deepAutoMerge is set (show only), the projection additionally works out the
+// Git mergeability of the current pair under the held lock.
+func (service *Service) viewForHeads(ctx context.Context, repositoryPath string, record state.PullRequest, source, target branchHead, deepAutoMerge bool) (*View, error) {
 	view, err := service.summaryForHeads(ctx, repositoryPath, record, source, target)
 	if err != nil {
 		return nil, err
+	}
+	if deepAutoMerge && view.AutoMerge != nil {
+		intent, ok, err := service.Store.PullRequestAutoMerge(ctx, record.RepositoryID, record.Number)
+		if err != nil {
+			return nil, &Problem{Code: "state_unavailable", Message: "The automatic merge could not be read.", Cause: err}
+		}
+		if ok {
+			view.AutoMerge = service.deepAutoMergeViewLocked(ctx, repositoryPath, record, intent, source, target, view.Checks)
+		}
 	}
 	body := record.Body
 	view.Body = &body
@@ -977,6 +1068,15 @@ func (service *Service) summaryForHeads(ctx context.Context, repositoryPath stri
 		view.Review = Review{Status: "decision_required", Independent: false, ExecutedChecks: false}
 	}
 	view.MergeEligibility = evaluateEligibility(record.Status, source, target)
+	if record.Status == state.PullRequestOpen {
+		intent, ok, err := service.Store.PullRequestAutoMerge(ctx, record.RepositoryID, record.Number)
+		if err != nil {
+			return nil, &Problem{Code: "state_unavailable", Message: "The automatic merge could not be read.", Cause: err}
+		}
+		if ok {
+			view.AutoMerge = service.autoMergeView(intent, record.Status, source, target, view.Checks)
+		}
+	}
 	if record.Status == state.PullRequestMerged {
 		intent, ok, err := service.Store.PullRequestMergeIntent(ctx, record.RepositoryID, record.Number, record.MergeSourceOID, record.MergeTargetOID)
 		if err != nil {

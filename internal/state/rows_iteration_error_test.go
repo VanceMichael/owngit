@@ -180,7 +180,7 @@ func TestRowReadsFailOnIterationError(t *testing.T) {
 	}
 	for _, table := range []string{
 		"passwords", "repositories",
-		"pull_requests", "pull_request_revisions", "pull_request_reviews", "pull_request_merge_intents",
+		"pull_requests", "pull_request_revisions", "pull_request_reviews", "pull_request_merge_intents", "pull_request_auto_merges",
 		"tasks", "check_configurations", "check_cycles", "check_attempts", "check_results",
 		"check_policies", "check_jobs",
 		"import_sources", "import_runs", "import_ref_observations", "import_publication_intents",

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Open pull requests can now merge automatically after their checks pass. Enable the intent from the pull request page, with `owngit pr auto-merge --number N`, or with the owner API (`POST /api/v1/repositories/{r}/pull-requests/{n}/auto-merge`); cancel it with `--cancel` or the `.../auto-merge/cancel` endpoint. OwnGit merges only once the latest evidence of the current source commit passed on a clean worktree with the committed check configuration and the current pair merges without a conflict; missing, running, failed, stale, unreadable or conflicting states are shown as explicit waiting or blocked reasons and never merge. Branch moves re-evaluate the current pair, cancels and closes have a deterministic order against a background merge, pending intents survive restarts and backup restore, and repositories without automatic merging keep the advisory-checks manual merge behavior.
+
 ## [1.1.7] - 2026-10-09
 
 This release fixes security problems rated Medium and Low by building OwnGit with Go 1.27.2. It has no other changes. Upgrading is recommended.

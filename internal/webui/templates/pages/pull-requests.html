@@ -43,6 +43,7 @@
                request with no check and no review reads as two absences
                rather than as a clean one. */}}
           <span class="prrow__e">
+            {{if .AutoMerge}}<span class="pill prrow__auto">{{icon "clock"}}{{bi $lang "pr.auto_merge.list_badge"}}</span>{{end}}
             {{template "stateChip" dict "Lang" $lang "S" (checkState .Checks)}}
             {{template "stateChip" dict "Lang" $lang "S" (reviewState .Review)}}
           </span>

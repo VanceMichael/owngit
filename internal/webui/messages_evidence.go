@@ -224,6 +224,25 @@ const (
 	MsgPRMergedFixed   MessageCode = "pr.result.merged_fixed"
 	MsgPRUpToDate      MessageCode = "pr.result.up_to_date"
 
+	// Automatic merge opt-in, cancel and waiting/blocked reasons.
+	MsgAutoMergeTitle                      MessageCode = "pr.auto_merge.title"
+	MsgAutoMergeEnable                     MessageCode = "pr.auto_merge.enable"
+	MsgAutoMergeCancelButton               MessageCode = "pr.auto_merge.cancel_button"
+	MsgAutoMergeHelp                       MessageCode = "pr.auto_merge.help"
+	MsgAutoMergeListBadge                  MessageCode = "pr.auto_merge.list_badge"
+	MsgAutoMergeEnabled                    MessageCode = "pr.auto_merge.enabled"
+	MsgAutoMergeCanceled                   MessageCode = "pr.auto_merge.canceled"
+	MsgAutoMergeNotEnabled                 MessageCode = "pr.auto_merge.not_enabled"
+	MsgAutoMergeWaitingChecks              MessageCode = "pr.auto_merge.waiting_for_checks"
+	MsgAutoMergeChecksRunning              MessageCode = "pr.auto_merge.checks_running"
+	MsgAutoMergeEvidenceUnreadable         MessageCode = "pr.auto_merge.evidence_unreadable"
+	MsgAutoMergeMergeConflict              MessageCode = "pr.auto_merge.merge_conflict"
+	MsgAutoMergeRepositoryUnavailable      MessageCode = "pr.auto_merge.repository_unavailable"
+	MsgAutoMergeReconciling                MessageCode = "pr.auto_merge.reconciling"
+	MsgAutoMergeChecksFailed               MessageCode = "pr.auto_merge.checks_failed"
+	MsgAutoMergeChecksUntrustedWorktree    MessageCode = "pr.auto_merge.untrusted_worktree"
+	MsgAutoMergeChecksConfigurationChanged MessageCode = "pr.auto_merge.configuration_changed"
+
 	// The pull request list filter and its next page.
 	MsgPRFilterLabel      MessageCode = "pr.filter.label"
 	MsgPRFilterAll        MessageCode = "pr.filter.all"
@@ -725,6 +744,74 @@ var evidenceCatalog = map[MessageCode]message{
 	MsgPRUpToDate: {
 		en: "Already up to date. The target branch already contained this work, so no commit was made.",
 		ko: "이미 최신 상태입니다. 대상 브랜치에 이 작업이 이미 들어 있어 커밋을 만들지 않았습니다.",
+	},
+	MsgAutoMergeTitle: {
+		en: "Automatic merge",
+		ko: "자동 병합",
+	},
+	MsgAutoMergeEnable: {
+		en: "Merge automatically when checks pass",
+		ko: "검사 통과 시 자동으로 병합",
+	},
+	MsgAutoMergeCancelButton: {
+		en: "Cancel automatic merge",
+		ko: "자동 병합 취소",
+	},
+	MsgAutoMergeHelp: {
+		en: "OwnGit merges this request itself when the current source commit's checks passed on a clean worktree and the branches merge without a conflict. You can still merge manually. Canceling publishes nothing.",
+		ko: "현재 원본 커밋의 검사가 깨끗한 작업 트리에서 통과하고 브랜치가 충돌 없이 병합되면 OwnGit이 이 요청을 직접 병합합니다. 수동으로 병합할 수도 있습니다. 취소해도 병합이 게시되지는 않습니다.",
+	},
+	MsgAutoMergeListBadge: {
+		en: "Automatic merge",
+		ko: "자동 병합",
+	},
+	MsgAutoMergeEnabled: {
+		en: "Automatic merging enabled. OwnGit merges this request itself once the checks of the current source commit pass.",
+		ko: "자동 병합을 켰습니다. 현재 원본 커밋의 검사를 통과하면 OwnGit이 이 요청을 직접 병합합니다.",
+	},
+	MsgAutoMergeCanceled: {
+		en: "Automatic merging canceled.",
+		ko: "자동 병합을 취소했습니다.",
+	},
+	MsgAutoMergeNotEnabled: {
+		en: "Automatic merging is not enabled for this pull request.",
+		ko: "이 풀 리퀘스트에는 자동 병합이 켜져 있지 않습니다.",
+	},
+	MsgAutoMergeWaitingChecks: {
+		en: "Waiting for passing checks of the current source commit.",
+		ko: "현재 원본 커밋의 통과 검사를 기다리고 있습니다.",
+	},
+	MsgAutoMergeChecksRunning: {
+		en: "Checks of the current source commit are still running.",
+		ko: "현재 원본 커밋의 검사가 아직 실행 중입니다.",
+	},
+	MsgAutoMergeEvidenceUnreadable: {
+		en: "The check records could not be read, so the automatic merge waits and retries.",
+		ko: "검사 기록을 읽을 수 없어 자동 병합이 기다리며 다시 시도합니다.",
+	},
+	MsgAutoMergeMergeConflict: {
+		en: "The current revisions conflict. The automatic merge waits until a branch change resolves them.",
+		ko: "현재 리비전이 충돌합니다. 브랜치 변경으로 해결될 때까지 자동 병합이 기다립니다.",
+	},
+	MsgAutoMergeRepositoryUnavailable: {
+		en: "The repository is temporarily unavailable, so the automatic merge waits and retries.",
+		ko: "저장소를 일시적으로 사용할 수 없어 자동 병합이 기다리며 다시 시도합니다.",
+	},
+	MsgAutoMergeReconciling: {
+		en: "The current source commit passed its checks and merges cleanly. OwnGit is publishing the merge.",
+		ko: "현재 원본 커밋이 검사를 통과했고 깨끗이 병합됩니다. OwnGit이 병합을 게시하는 중입니다.",
+	},
+	MsgAutoMergeChecksFailed: {
+		en: "The latest checks of the current source commit did not pass.",
+		ko: "현재 원본 커밋의 최근 검사가 통과하지 못했습니다.",
+	},
+	MsgAutoMergeChecksUntrustedWorktree: {
+		en: "The passing checks were not recorded from a clean worktree of the current source commit, so they cannot publish an automatic merge.",
+		ko: "통과한 검사가 현재 원본 커밋의 깨끗한 작업 트리에서 기록되지 않아 자동 병합을 게시할 수 없습니다.",
+	},
+	MsgAutoMergeChecksConfigurationChanged: {
+		en: "The passing checks used a different check configuration than the workflow committed at the current source commit.",
+		ko: "통과한 검사가 현재 원본 커밋에 커밋된 워크플로와 다른 검사 구성을 사용했습니다.",
 	},
 	MsgPRReconciling: {
 		en: "Your work was kept, but OwnGit still has to finish recording it. Reload shortly.",

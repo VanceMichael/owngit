@@ -115,6 +115,9 @@ type Coordinator struct {
 	DockerPath    string
 	Interval      time.Duration
 	Logf          func(string, ...any)
+	// OnCheckCompletion signals the auto-merge convergence after a local
+	// worker wrote a terminal check attempt. It must not block or run Git.
+	OnCheckCompletion func(repositoryID string)
 
 	wake              chan struct{}
 	admits            chan struct{}
@@ -1030,6 +1033,9 @@ func (coordinator *Coordinator) runOneLocal(ctx context.Context) error {
 		}
 		if err := coordinator.executeLocal(ctx, job); err != nil {
 			return err
+		}
+		if coordinator.OnCheckCompletion != nil {
+			coordinator.OnCheckCompletion(id)
 		}
 		coordinator.Wake(id)
 		return nil

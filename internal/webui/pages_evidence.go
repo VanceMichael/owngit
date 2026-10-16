@@ -52,10 +52,23 @@ type PullRequestRow struct {
 	Target RevisionState
 	// Checks and Review are the evidence bound to the current revision. They
 	// are advisory: neither one holds a merge.
-	Checks    CheckEvidence
-	Review    ReviewEvidence
+	Checks CheckEvidence
+	Review ReviewEvidence
+	// AutoMerge marks a row whose request merges automatically once its
+	// current checks pass.
+	AutoMerge bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// AutoMergePanel is the automatic merge section of an open pull request.
+type AutoMergePanel struct {
+	// Status is "waiting" or "blocked".
+	Status string
+	// Reason is the stable backend reason code.
+	Reason string
+	// Message is the localized sentence for the status and reason.
+	Message MessageCode
 }
 
 // Pull request creation
@@ -167,6 +180,9 @@ type PullRequestPage struct {
 	Merge MergeAvailability
 	// Merged describes a completed merge. Nil while the request is open.
 	Merged *MergeRecord
+	// AutoMerge describes an enabled automatic merge. Nil when it is
+	// disabled or the request is not open.
+	AutoMerge *AutoMergePanel
 
 	// Changes are what the current source adds since it branched from the
 	// current target, counted from their merge base.
@@ -211,6 +227,10 @@ type PullRequestPage struct {
 	// one. Each is set only in the state where it applies.
 	CloseURL  string
 	ReopenURL string
+	// AutoMergeEnableURL and AutoMergeCancelURL receive the opt-in forms.
+	// Each is set only for the action currently available.
+	AutoMergeEnableURL string
+	AutoMergeCancelURL string
 	// TasksURL opens the repository's task and check history.
 	TasksURL string
 
