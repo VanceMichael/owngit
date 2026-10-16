@@ -18,6 +18,7 @@ var helpCommands = []struct {
 	{"network", false}, {"network show", true}, {"network set", true}, {"network reset", true},
 	{"tailscale", false}, {"tailscale status", true}, {"tailscale on", true}, {"tailscale off", true},
 	{"forget-check-container", true}, {"backup", true}, {"backup verify", true}, {"backup now", true}, {"backup status", true}, {"backup runs", true}, {"backup check", true}, {"backup download", true}, {"backup upload", true},
+	{"backup plan", false}, {"backup plan list", true}, {"backup plan create", true}, {"backup plan delete", true},
 	{"backup schedule", false}, {"backup schedule show", true}, {"backup schedule set", true}, {"backup schedule off", true}, {"restore", true}, {"upgrade-backup", true}, {"tray", true},
 	{"repo", false}, {"repo list", true}, {"repo show", true}, {"repo create", true},
 	{"repo kept-history", true}, {"repo restore", false}, {"repo restore preview", true}, {"repo restore apply", true},

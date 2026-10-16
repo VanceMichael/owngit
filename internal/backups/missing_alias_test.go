@@ -57,15 +57,15 @@ func TestInterruptedServingBackupHasNoAliasNotice(t *testing.T) {
 	remote, err := f.manager.Path("project")
 	noErr(t, err)
 	git(t, remote, "--git-dir", ".", "symbolic-ref", "refs/heads/alias", "refs/heads/main")
-	schedule := f.configure(t, ScheduleChange{})
-	run := state.BackupRun{ID: strings.Repeat("d", 32), Kind: state.BackupRunManual, Status: state.BackupRunning,
+	f.configure(t, ScheduleChange{})
+	run := state.BackupRun{ID: strings.Repeat("d", 32), Plan: state.DefaultBackupPlanName, Kind: state.BackupRunManual, Status: state.BackupRunning,
 		Destination: f.destination, BackupName: namePrefix + "interrupted-alias", Verification: state.BackupVerifyNotRun, StartedAt: f.clock.Now()}
 	noErr(t, f.store.StartBackupRun(context.Background(), run))
 	var logs []string
 	f.service.Logf = func(format string, arguments ...any) { logs = append(logs, fmt.Sprintf(format, arguments...)) }
 	stopped, cancel := context.WithCancel(context.Background())
 	cancel()
-	f.service.execute(stopped, run, schedule)
+	f.service.execute(stopped, run, f.plan(t))
 	run = f.run(t, run.ID)
 	if run.Status != state.BackupInterrupted || run.Message != InterruptedMessage || strings.Contains(strings.Join(logs, "\n"), "alias notice") {
 		t.Fatalf("interrupted backup gained alias guidance or lost its error: %+v, logs %v", run, logs)
@@ -77,13 +77,13 @@ func TestServingBackupLogsAliasesWhenRunCannotBeRecorded(t *testing.T) {
 	remote, err := f.manager.Path("project")
 	noErr(t, err)
 	git(t, remote, "--git-dir", ".", "symbolic-ref", "refs/heads/alias", "refs/heads/main")
-	schedule := f.configure(t, ScheduleChange{})
+	f.configure(t, ScheduleChange{})
 	// No running record exists, so FinishBackupRun must reject the result.
-	run := state.BackupRun{ID: strings.Repeat("e", 32), Kind: state.BackupRunManual, Status: state.BackupRunning,
+	run := state.BackupRun{ID: strings.Repeat("e", 32), Plan: state.DefaultBackupPlanName, Kind: state.BackupRunManual, Status: state.BackupRunning,
 		Destination: f.destination, BackupName: namePrefix + "unrecorded-alias", Verification: state.BackupVerifyNotRun, StartedAt: f.clock.Now()}
 	var logs []string
 	f.service.Logf = func(format string, arguments ...any) { logs = append(logs, fmt.Sprintf(format, arguments...)) }
-	f.service.execute(context.Background(), run, schedule)
+	f.service.execute(context.Background(), run, f.plan(t))
 	log := strings.Join(logs, "\n")
 	if !strings.Contains(log, "ended succeeded but could not be recorded") || !strings.Contains(log, "alias notice: project: refs/heads/alias -> refs/heads/main. git symbolic-ref -- 'refs/heads/alias' 'refs/heads/main'") {
 		t.Fatalf("recording failure hid the successful capture notice: %s", log)

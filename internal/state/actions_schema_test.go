@@ -38,10 +38,10 @@ func TestActionsSchemaUpgrade(t *testing.T) {
 				if store != nil {
 					store.Close()
 				}
-				if err == nil || !strings.Contains(err.Error(), "apply state schema migration 17") {
-					t.Fatalf("failed migration=%v", err)
-				}
-				db = openSchemaDatabase(t, filepath.Join(directory, databaseName))
+				if err == nil || !strings.Contains(err.Error(), "apply state schema migration 18") {
+				t.Fatalf("failed migration=%v", err)
+			}
+			db = openSchemaDatabase(t, filepath.Join(directory, databaseName))
 				defer db.Close()
 				afterFingerprint, _, err := schemaFingerprint(ctx, db)
 				noErr(t, err)
@@ -97,12 +97,20 @@ func TestActionsSchemaUpgrade(t *testing.T) {
 	}
 }
 
+// renamedByMigration tables are machine-local backup tables that schema 18
+// renames; the fixture holds none of their rows, and the conversion is
+// covered by the backup plan migration tests.
+var renamedByMigration = map[string]bool{"backup_schedule": true, "backup_plans": true}
+
 func schemaTableRecords(t *testing.T, db queryRower, columns map[string][]string) (map[string][]string, map[string][]string) {
 	t.Helper()
 	ctx := context.Background()
 	if columns == nil {
 		columns = make(map[string][]string)
 		for table := range tableRowCounts(t, db) {
+			if renamedByMigration[table] {
+				continue
+			}
 			rows, err := db.QueryContext(ctx, `SELECT * FROM "`+table+`" LIMIT 0`)
 			noErr(t, err)
 			columns[table], err = rows.Columns()
@@ -112,6 +120,9 @@ func schemaTableRecords(t *testing.T, db queryRower, columns map[string][]string
 	}
 	records := make(map[string][]string, len(columns))
 	for table, names := range columns {
+		if renamedByMigration[table] {
+			continue
+		}
 		quoted := make([]string, len(names))
 		for i, name := range names {
 			quoted[i] = `"` + name + `"`
@@ -218,8 +229,8 @@ func TestReleasedReaderRefusesActionsSchemaUnchanged(t *testing.T) {
 	if store != nil {
 		store.Close()
 	}
-	if err == nil || !strings.Contains(err.Error(), "schema version 17 is newer") {
-		t.Fatalf("schema-16 reader=%v", err)
+	if err == nil || !strings.Contains(err.Error(), "schema version 18 is newer") {
+		t.Fatalf("schema-17 reader=%v", err)
 	}
 	assertSchemaDirectoryUnchanged(t, directory, before)
 }

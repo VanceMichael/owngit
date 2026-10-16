@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -117,8 +118,9 @@ type Service struct {
 	// inUse counts the downloads of each run's backup; -1 marks one that
 	// is being removed.
 	inUse map[string]int
-	// limit is what the last test of the backup folder found.
-	limit *RestoreLimit
+	// limits is what the last test of each backup folder found, keyed by
+	// the destination it concerns.
+	limits map[string]*RestoreLimit
 	// pending is the finished run whose record the state store refused,
 	// held until the state takes it, so Status and Runs show it as the
 	// running backup, saying how it ended and that its record is not saved
@@ -164,8 +166,10 @@ func (s *Service) Start(ctx context.Context) error {
 	s.open(ctx)
 	s.work.Add(1)
 	go s.schedule()
-	if schedule, configured, err := s.Store.BackupSchedule(ctx); err == nil && configured {
-		go s.noteRestoreLimit(schedule.Destination)
+	if plans, err := s.Store.BackupPlans(ctx); err == nil {
+		for _, plan := range plans {
+			go s.noteRestoreLimit(plan.Destination)
+		}
 	}
 	return nil
 }
@@ -229,57 +233,103 @@ func (s *Service) schedule() {
 	}
 }
 
-// tick starts a scheduled backup when one is due and returns how long to
-// wait before looking again. A backup that ends wakes the scheduler.
-func (s *Service) tick() time.Duration {
-	next, err := s.nextRun(s.ctx)
-	if err != nil {
-		s.logf("scheduled backups could not read their schedule: %v", err)
-		return recheck
-	}
-	if next.IsZero() {
-		return recheck
-	}
-	if wait := next.Sub(s.now()); wait > 0 {
-		return min(wait, recheck)
-	}
-	if _, err := s.start(state.BackupRunScheduled); err != nil && !errors.Is(err, state.ErrBackupRunning) && !errors.Is(err, ErrBusy) && s.ctx.Err() == nil {
-		s.logf("a scheduled backup did not start: %v", err)
-	}
-	return recheck
+// planTiming is a plan with when its next scheduled backup is due: zero
+// when the plan is off.
+type planTiming struct {
+	plan state.BackupPlan
+	due  time.Time
 }
 
-// nextRun is when the next scheduled backup is due: one interval after the
-// start of the last scheduled backup, or at once when there was none. It
-// is zero when scheduled backups are off or not configured. A run that
-// ended in any way used its time, so a restart never repeats it.
-func (s *Service) nextRun(ctx context.Context) (time.Time, error) {
-	schedule, configured, err := s.Store.BackupSchedule(ctx)
-	if err != nil || !configured || !schedule.Enabled {
-		return time.Time{}, err
-	}
-	runs, err := s.Store.BackupRuns(ctx)
+// planTimings reads every plan with its due time, in the plans' stable
+// order.
+func (s *Service) planTimings(ctx context.Context) ([]planTiming, error) {
+	plans, err := s.Store.BackupPlans(ctx)
 	if err != nil {
-		return time.Time{}, err
+		return nil, err
 	}
-	for _, run := range runs {
-		if run.Kind == state.BackupRunScheduled {
-			return run.StartedAt.Add(schedule.Interval), nil
+	timings := make([]planTiming, 0, len(plans))
+	for _, plan := range plans {
+		timing := planTiming{plan: plan}
+		if plan.Enabled {
+			last, found, err := s.Store.LastScheduledBackupRun(ctx, plan.Name)
+			if err != nil {
+				return nil, err
+			}
+			if found {
+				timing.due = last.StartedAt.Add(plan.Interval)
+			} else {
+				timing.due = plan.CreatedAt
+			}
+		}
+		timings = append(timings, timing)
+	}
+	return timings, nil
+}
+
+// dueFrom returns the timings whose time has come, the soonest due first.
+// Equal due times keep the plans' stable order: a plan that is due first
+// starts first, and ties never depend on map iteration.
+func dueFrom(timings []planTiming, now time.Time) []planTiming {
+	var due []planTiming
+	for _, timing := range timings {
+		if !timing.due.IsZero() && !timing.due.After(now) {
+			due = append(due, timing)
 		}
 	}
-	return schedule.UpdatedAt, nil
+	// timings already hold the stable order; a stable sort by due time
+	// keeps it between equal due times.
+	sort.SliceStable(due, func(i, j int) bool { return due[i].due.Before(due[j].due) })
+	return due
 }
 
-// StartNow starts a backup into the configured folder and returns its run
-// at once. It fails with state.ErrBackupRunning while another one runs or
-// finishes (it is writing its record or removing its older backups), with
-// ErrBusy while OwnGit verifies or receives a backup, and with
-// ErrNotConfigured before a folder is set.
+// tick starts the scheduled backup of the plan that is due first and
+// returns how long to wait before looking again. The end of a backup, a
+// verification or an upload wakes the scheduler, so a plan that was due
+// while the one slot was taken starts when it frees, and then the next
+// plan that is still due starts: a plan that failed used its interval, so
+// it cannot take the turn a plan that is still due waits for.
+func (s *Service) tick() time.Duration {
+	now := s.now()
+	timings, err := s.planTimings(s.ctx)
+	if err != nil {
+		s.logf("scheduled backups could not read their plans: %v", err)
+		return recheck
+	}
+	if due := dueFrom(timings, now); len(due) > 0 {
+		if _, err := s.start(state.BackupRunScheduled, due[0].plan.Name); err != nil && !errors.Is(err, state.ErrBackupRunning) && !errors.Is(err, ErrBusy) && !errors.Is(err, ErrPlanNotFound) && s.ctx.Err() == nil {
+			s.logf("a scheduled backup of plan %s did not start: %v", due[0].plan.Name, err)
+		}
+		return recheck
+	}
+	wait := time.Duration(0)
+	for _, timing := range timings {
+		if timing.due.IsZero() {
+			continue
+		}
+		until := timing.due.Sub(now)
+		if until <= 0 {
+			return recheck
+		}
+		if wait == 0 || until < wait {
+			wait = until
+		}
+	}
+	if wait == 0 {
+		return recheck
+	}
+	return min(wait, recheck)
+}
+
+// StartNow starts a backup into the default plan's folder and returns its
+// run at once. It fails with state.ErrBackupRunning while another one runs
+// or finishes (it is writing its record or removing its older backups),
+// with ErrBusy while OwnGit verifies or receives a backup, and with
+// ErrNotConfigured before the default plan is set.
 func (s *Service) StartNow() (state.BackupRun, error) {
-	return s.start(state.BackupRunManual)
+	return s.start(state.BackupRunManual, state.DefaultBackupPlanName)
 }
 
-func (s *Service) start(kind string) (state.BackupRun, error) {
+func (s *Service) start(kind, planName string) (state.BackupRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ctx == nil || s.ctx.Err() != nil {
@@ -291,12 +341,17 @@ func (s *Service) start(kind string) (state.BackupRun, error) {
 	if s.removing > 0 {
 		return state.BackupRun{}, state.ErrBackupRunning
 	}
-	schedule, configured, err := s.Store.BackupSchedule(s.ctx)
+	plan, configured, err := s.Store.BackupPlan(s.ctx, planName)
 	if err != nil {
 		return state.BackupRun{}, err
 	}
 	if !configured {
-		return state.BackupRun{}, ErrNotConfigured
+		// The calls that predate named plans name the default plan, and
+		// keep reading "no folder is set" when it is absent.
+		if planName == state.DefaultBackupPlanName {
+			return state.BackupRun{}, ErrNotConfigured
+		}
+		return state.BackupRun{}, ErrPlanNotFound
 	}
 	id := make([]byte, 16)
 	if _, err := rand.Read(id); err != nil {
@@ -304,8 +359,8 @@ func (s *Service) start(kind string) (state.BackupRun, error) {
 	}
 	now := s.now()
 	run := state.BackupRun{
-		ID: hex.EncodeToString(id), Kind: kind, Status: state.BackupRunning, Destination: schedule.Destination,
-		Verification: state.BackupVerifyNotRun, StartedAt: now,
+		ID: hex.EncodeToString(id), Plan: plan.Name, Kind: kind, Status: state.BackupRunning,
+		Destination: plan.Destination, Verification: state.BackupVerifyNotRun, StartedAt: now,
 	}
 	run.BackupName = namePrefix + now.UTC().Format("20060102-150405") + "-" + run.ID[:8]
 	if err := s.Store.StartBackupRun(s.ctx, run); err != nil {
@@ -314,15 +369,17 @@ func (s *Service) start(kind string) (state.BackupRun, error) {
 	s.work.Add(1)
 	go func(ctx context.Context) {
 		defer s.work.Done()
-		s.execute(ctx, run, schedule)
+		s.execute(ctx, run, plan)
 		s.Wake()
 	}(s.ctx)
 	return run, nil
 }
 
-// execute makes the backup of run, verifies it when schedule asks, records
-// how it ended, and removes older backups once that record is saved.
-func (s *Service) execute(ctx context.Context, run state.BackupRun, schedule state.BackupSchedule) {
+// execute makes the backup of run, verifies it when the plan as it was
+// when the run started asks, records how it ended, and removes older
+// backups of that plan once that record is saved.
+func (s *Service) execute(ctx context.Context, run state.BackupRun, plan state.BackupPlan) {
+	schedule := plan.BackupSchedule
 	output := filepath.Join(run.Destination, run.BackupName)
 	note, err := s.checkRoom(ctx, run)
 	var report recovery.CaptureReport
@@ -599,7 +656,10 @@ func (s *Service) published(run state.BackupRun) (bool, string) {
 // be read, the backup goes ahead and note says why the room was not
 // checked.
 func (s *Service) checkRoom(ctx context.Context, run state.BackupRun) (note string, err error) {
-	runs, err := s.Store.BackupRuns(ctx)
+	// Only this plan's backups estimate the room its backup needs: another
+	// plan that writes the same folder keeps a separate estimate, and a
+	// plan whose folder changed compares only backups in the new folder.
+	runs, err := s.Store.BackupRunsOfPlan(ctx, run.Plan)
 	if err != nil {
 		return "", err
 	}
@@ -727,7 +787,10 @@ func validName(name string) bool {
 // OwnGit did not write. It returns what it could not do; nothing else is
 // touched.
 func (s *Service) removeOld(ctx context.Context, run state.BackupRun, keep int) []string {
-	runs, err := s.Store.BackupRuns(ctx)
+	// Only runs of the same plan are removal candidates, so two plans that
+	// write the same folder never remove each other's backups, even when
+	// the folder, the manifest checks and the timestamps match.
+	runs, err := s.Store.BackupRunsOfPlan(ctx, run.Plan)
 	if err != nil {
 		return []string{"older backups were not removed because the backup records could not be read: " + err.Error()}
 	}

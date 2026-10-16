@@ -35,7 +35,7 @@ func portableRecordsStore(t *testing.T) *Store {
 		`UPDATE import_sources SET overwrite_diverged=1,follow_upstream_deletions=1,extra_ref_prefixes='["refs/changes/"]',
 			allow_private_network=1,allow_plain_http=1,redirect_policy='approved',approved_redirect_origin='https://mirror.example.invalid',allow_reserved_addresses=1,limits_json='{"pack_bytes":1}'`,
 		`INSERT INTO share_links(id,repository_id,secret_hash,scope,created_at) VALUES('00000000000000000000000000000001','project',zeroblob(32),'clone',1800000400)`,
-		`INSERT INTO backup_schedule(singleton,enabled,interval_seconds,destination,keep,verify,updated_at) VALUES(1,1,43200,'/home/example/backups',7,1,1800000500)`,
+		`INSERT INTO backup_plans(name,enabled,interval_seconds,destination,keep,verify,created_at,updated_at) VALUES('default',1,43200,'/home/example/backups',7,1,1800000500,1800000500)`,
 		`INSERT INTO backup_runs(id,kind,status,destination,backup_name,verification,started_at,finished_at,longest_hold_ms,longest_hold_repository) VALUES('00000000000000000000000000000002','scheduled','succeeded','/home/example/backups','owngit-1','passed',1800000600,1800000700,12,'project')`,
 		`INSERT INTO push_events(repository_id,ref_name,old_oid,new_oid,refs_updated,actor,pushed_at) VALUES('project','refs/heads/main','','` + strings.Repeat("3", 40) + `',1,'{"kind":"access"}',1800000800)`,
 		`INSERT INTO metadata(key,value) VALUES('admin_confirmation','never'),('retain_history','off')`,
@@ -98,7 +98,7 @@ func TestSchema16PortableRecordsRoundTrip(t *testing.T) {
 	if private != 0 || plain != 0 || redirect != "refuse" || origin != "" || reserved != 0 || limits != "{}" {
 		t.Fatalf("machine-local import choices came back: %d %d %q %q %d %q", private, plain, redirect, origin, reserved, limits)
 	}
-	for _, table := range []string{"share_links", "backup_schedule", "backup_runs", "push_events", "sessions", "helper_credentials"} {
+	for _, table := range []string{"share_links", "backup_plans", "backup_runs", "push_events", "sessions", "helper_credentials"} {
 		if count, err := destination.TableRowCount(ctx, table); err != nil || count != 0 {
 			t.Fatalf("%s has %d rows after restore, err=%v", table, count, err)
 		}
@@ -188,7 +188,7 @@ func TestSchema16Constraints(t *testing.T) {
 		"short share secret":       `INSERT INTO share_links(id,repository_id,secret_hash,scope,created_at) VALUES('00000000000000000000000000000009','project',zeroblob(16),'browse',1)`,
 		"second running backup": `INSERT INTO backup_runs(id,kind,status,destination,started_at) VALUES('00000000000000000000000000000003','manual','running','/home/example/b',1);
 			INSERT INTO backup_runs(id,kind,status,destination,started_at) VALUES('00000000000000000000000000000004','scheduled','running','/home/example/b',2)`,
-		"backup every ten minutes":     `UPDATE backup_schedule SET interval_seconds=600`,
+		"backup every ten minutes":     `UPDATE backup_plans SET interval_seconds=600`,
 		"negative backup hold":         `UPDATE backup_runs SET longest_hold_ms=-1`,
 		"short manifest digest":        `UPDATE backup_runs SET manifest_sha256='abc'`,
 		"extra refs that are not JSON": `UPDATE repository_policies SET extra_ref_prefixes='refs/notes/'`,

@@ -2,12 +2,14 @@
      information: an ordinary visitor sees what they do and where to
      confirm.
 
-     "backups" is the schedule, one group form with its own Save. The state,
-     Back up now, the recorded backups and the upload are "backup_runs":
-     their buttons are ordinary POST forms, which ask for the administrator
-     password when a change does (Viewer.AdminAsks). A download answers with
-     the file, so the page stays. Nothing here restores: a restore is a
-     command for this computer while OwnGit is stopped.
+     "backups" is the named plans: a chooser when more than one exists, the
+     selected plan's schedule form with its own Save and Delete, and a new
+     plan form. The state, Back up now, the recorded backups and the upload
+     are "backup_runs": their buttons are ordinary POST forms, which ask
+     for the administrator password when a change does (Viewer.AdminAsks).
+     A download answers with the file, so the page stays. Nothing here
+     restores: a restore is a command for this computer while OwnGit is
+     stopped.
 
      Both sections are groups (data-group), so a schedule saved without
      leaving the page also shows the state and Back up now as saved. While
@@ -15,12 +17,24 @@
      the recorded backups and the upload again until it ends, and the
      status line after the state says so once. */}}
 {{define "setBackups"}}{{$p := .Page}}{{$lang := .Lang}}{{$b := $p.Backups}}{{$v := .Chrome.Viewer}}
-{{$gn := forAction $p.Group "backups" $p.Notices}}{{$focus := firstError $gn "backup_destination" "backup_interval" "backup_keep" "admin_password"}}
+{{$gn := forAction $p.Group "backups" $p.Notices}}{{$focus := firstError $gn "backup_destination" "backup_interval" "backup_keep" "admin_password" "backup_new_plan" "backup_new_destination"}}
 <section class="grp" id="grp-backups" aria-labelledby="grp-backups-h" data-group="backups"{{if hasError $gn}} data-group-refused{{end}}{{if and $b.Visible (not $b.Configured)}} data-group-open{{end}}>
   {{template "grpHead" dict "Lang" $lang "Group" "backups" "Title" (bi $lang "backup.title")}}
   <p class="scope">{{icon "info"}}<span>{{bi $lang "backup.scope"}}</span></p>
   {{template "grpNotes" dict "Lang" $lang "Notices" $gn "Focus" $focus}}
   {{if $b.Visible}}
+  {{if $b.ChoosePlans}}
+  <form class="gform" method="get" action="{{tabURL "storage"}}">
+    <div class="f f--row">
+      <label for="backup-plan-choose">{{bi $lang "backup.plans_title"}}</label>
+      <select id="backup-plan-choose" name="backup_plan">
+        {{range $b.Plans}}<option value="{{.Name}}"{{if .Selected}} selected{{end}}>{{.Name}} — {{if eq .State "on"}}{{bi $lang "backup.state_on"}}{{else}}{{bi $lang "backup.state_off"}}{{end}}</option>{{end}}
+      </select>
+      <button type="submit" class="btn">{{icon "check"}}<span>{{bi $lang "backup.plan_choose"}}</span></button>
+    </div>
+    <p class="f__help">{{bi $lang "backup.plan_name_help"}}</p>
+  </form>
+  {{end}}
   {{if not $b.Configured}}<p class="wn">{{icon "warning"}}<span>{{bi $lang "backup.not_configured"}}</span></p>{{end}}
   {{$dest := draft $p.Group $p.Draft "backups" "backup_destination" $b.Destination}}
   {{$interval := draft $p.Group $p.Draft "backups" "backup_interval" $b.Interval}}
@@ -29,7 +43,9 @@
   {{$verify := draft $p.Group $p.Draft "backups" "backup_verify" (onOff $b.Verify)}}
     <form class="gform" method="post" action="{{tabURL "storage"}}" data-group-form>
     <input type="hidden" name="csrf" value="{{.Chrome.CSRF}}">
-    <input type="hidden" name="action" value="save_backup_schedule">
+    <input type="hidden" name="action" value="{{if $b.Configured}}save_backup_plan{{else}}save_backup_schedule{{end}}">
+    <input type="hidden" name="backup_plan" value="{{$b.SelectedPlan}}">
+    {{if $b.ChoosePlans}}<h3 class="grp__subh">{{bi $lang "backup.plan"}}: <span class="mono">{{$b.SelectedPlan}}</span></h3>{{end}}
     <div class="f f--row">
       <label for="backup-destination">{{bi $lang "backup.destination"}}</label>
       <input id="backup-destination" name="backup_destination" type="text" class="mono" autocomplete="off" spellcheck="false" required dir="ltr"
@@ -61,6 +77,46 @@
     <p class="wn" data-show-if="backup_verify=off"{{if eq $verify "on"}} hidden{{end}}>{{icon "warning"}}<span>{{bi $lang "backup.verify_off_warning"}}</span></p>
     {{template "grpBar" dict "Lang" $lang "Viewer" $v "Group" "backups" "Notices" $gn "Focus" $focus "Cancel" (tabURL "storage")}}
   </form>
+  {{if and $b.Configured $b.ChoosePlans}}
+  <form class="gform" method="post" action="{{tabURL "storage"}}" data-delete-plan>
+    <input type="hidden" name="csrf" value="{{.Chrome.CSRF}}">
+    <input type="hidden" name="action" value="delete_backup_plan">
+    <input type="hidden" name="backup_plan" value="{{$b.SelectedPlan}}">
+    {{if $v.AdminAsks}}
+    <div class="f">
+      <label for="backup-delete-admin">{{icon "lock"}}{{bi $lang "admin.field"}}</label>
+      <input id="backup-delete-admin" name="admin_password" type="password" autocomplete="current-password">
+    </div>
+    {{end}}
+    <div class="actions">
+      <button type="submit" class="btn btn--danger">{{icon "trash"}}<span>{{bi $lang "backup.delete_plan"}}</span></button>
+    </div>
+    <p class="f__help">{{bi $lang "backup.delete_plan_help"}}</p>
+  </form>
+  {{end}}
+  {{$newPlan := draft $p.Group $p.Draft "backups" "backup_new_plan" ""}}
+  {{$newDest := draft $p.Group $p.Draft "backups" "backup_new_destination" ""}}
+  <form class="gform" method="post" action="{{tabURL "storage"}}" data-group-form>
+    <input type="hidden" name="csrf" value="{{.Chrome.CSRF}}">
+    <input type="hidden" name="action" value="create_backup_plan">
+    <h3 class="grp__subh">{{bi $lang "backup.new_plan"}}</h3>
+    <div class="f f--row">
+      <label for="backup-new-plan">{{bi $lang "backup.plan_name"}}</label>
+      <input id="backup-new-plan" name="backup_new_plan" type="text" autocomplete="off" spellcheck="false" dir="ltr" value="{{$newPlan}}"
+             {{template "netDescribed" dict "Notices" $gn "Scope" "backups" "Field" "backup_new_plan" "Help" "backup-new-plan-help"}}{{if eq $focus "backup_new_plan"}} autofocus{{end}}>
+      {{template "fieldNotice" dict "Lang" $lang "Notices" $gn "Scope" "backups" "Field" "backup_new_plan"}}
+      <p class="f__help" id="backup-new-plan-help">{{bi $lang "backup.plan_name_help"}}</p>
+    </div>
+    <div class="f f--row">
+      <label for="backup-new-destination">{{bi $lang "backup.destination"}}</label>
+      <input id="backup-new-destination" name="backup_new_destination" type="text" class="mono" autocomplete="off" spellcheck="false" dir="ltr" value="{{$newDest}}"
+             {{template "netDescribed" dict "Notices" $gn "Scope" "backups" "Field" "backup_new_destination"}}{{if eq $focus "backup_new_destination"}} autofocus{{end}}>
+      {{template "fieldNotice" dict "Lang" $lang "Notices" $gn "Scope" "backups" "Field" "backup_new_destination"}}
+    </div>
+    <div class="grpBar">
+      <button type="submit" class="btn btn--primary">{{icon "kept"}}<span>{{bi $lang "backup.create_plan"}}</span></button>
+    </div>
+  </form>
   {{else}}{{template "policyAdminOnly" dict "Lang" $lang "Chrome" $.Chrome}}{{end}}
 </section>
 
@@ -90,6 +146,7 @@
        password when a change asks for it. Each run's buttons name it. */}}
   <form class="bkact" id="backup-act" method="post" action="{{tabURL "storage"}}">
     <input type="hidden" name="csrf" value="{{.Chrome.CSRF}}">
+    <input type="hidden" name="backup_plan" value="{{$b.SelectedPlan}}">
     {{if $v.AdminAsks}}
     <div class="f">
       <label for="backup-act-admin">{{icon "lock"}}{{bi $lang "admin.field"}}</label>
@@ -115,6 +172,7 @@
     <li class="bkrun">
       <p class="bkrun__h">{{statusIcon (backupState .Status)}}<span><b>{{backupWord $lang "status" .Status}}</b> {{biText $lang (dateTime "en" .StartedAt) (dateTime "ko" .StartedAt)}}</span></p>
       <dl class="kv kv--tight">
+        {{if $b.ChoosePlans}}<div><dt>{{bi $lang "backup.plan"}}</dt><dd class="mono">{{.Plan}}</dd></div>{{end}}
         <div><dt>{{bi $lang "backup.kind"}}</dt><dd>{{backupWord $lang "kind" .Kind}}</dd></div>
         <div><dt>{{bi $lang "backup.verification"}}</dt><dd>{{backupWord $lang "verification" .Verification}}</dd></div>
         <div><dt>{{bi $lang "backup.hold"}}</dt><dd>{{if not .HoldKnown}}{{bi $lang "backup.none"}}{{else if .HoldRepository}}{{biF $lang "backup.hold_value" (print .HoldMS) .HoldRepository}}{{else}}{{bi $lang "backup.hold_none"}}{{end}}</dd></div>

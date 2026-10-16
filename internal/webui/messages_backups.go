@@ -28,6 +28,21 @@ const (
 	MsgBackupVerifyHelp           MessageCode = "backup.verify_help"
 	MsgBackupScheduleRefused      MessageCode = "backup.schedule_refused"
 	MsgBackupSaved                MessageCode = "backup.saved"
+	MsgBackupPlansTitle           MessageCode = "backup.plans_title"
+	MsgBackupPlan                 MessageCode = "backup.plan"
+	MsgBackupPlanName             MessageCode = "backup.plan_name"
+	MsgBackupPlanNameHelp         MessageCode = "backup.plan_name_help"
+	MsgBackupNewPlan              MessageCode = "backup.new_plan"
+	MsgBackupCreatePlan           MessageCode = "backup.create_plan"
+	MsgBackupDeletePlan           MessageCode = "backup.delete_plan"
+	MsgBackupDeletePlanHelp       MessageCode = "backup.delete_plan_help"
+	MsgBackupPlanCreated          MessageCode = "backup.plan_created"
+	MsgBackupPlanDeleted          MessageCode = "backup.plan_deleted"
+	MsgBackupPlanChoose           MessageCode = "backup.plan_choose"
+	MsgBackupActiveRefused        MessageCode = "backup.plan_active_refused"
+	MsgBackupPlanExistsRefused    MessageCode = "backup.plan_exists_refused"
+	MsgBackupPlanMissingRefused   MessageCode = "backup.plan_missing_refused"
+	MsgBackupPlanLimitRefused     MessageCode = "backup.plan_limit_refused"
 	MsgBackupStateTitle           MessageCode = "backup.state_title"
 	MsgBackupStateOn              MessageCode = "backup.state_on"
 	MsgBackupStateOff             MessageCode = "backup.state_off"
@@ -203,6 +218,66 @@ var backupsCatalog = map[MessageCode]message{
 	MsgBackupSaved: {
 		en: "The backup settings are saved.",
 		ko: "백업 설정을 저장했습니다.",
+	},
+	MsgBackupPlansTitle: {
+		en: "Backup plans",
+		ko: "백업 계획",
+	},
+	MsgBackupPlan: {
+		en: "Plan",
+		ko: "계획",
+	},
+	MsgBackupPlanName: {
+		en: "Plan name",
+		ko: "계획 이름",
+	},
+	MsgBackupPlanNameHelp: {
+		en: "Letters, digits, underscores and dashes, up to 64 characters. Each run and backup is named with its plan.",
+		ko: "문자, 숫자, 밑줄, 하이픈만 사용하고 최대 64자까지 가능합니다. 각 실행과 백업에 계획 이름이 기록됩니다.",
+	},
+	MsgBackupNewPlan: {
+		en: "New plan",
+		ko: "새 계획",
+	},
+	MsgBackupCreatePlan: {
+		en: "Create plan",
+		ko: "계획 만들기",
+	},
+	MsgBackupDeletePlan: {
+		en: "Delete plan",
+		ko: "계획 삭제",
+	},
+	MsgBackupDeletePlanHelp: {
+		en: "Deletes only the plan. Backups it already made and their records stay listed and on disk, and OwnGit removes nothing for a deleted plan.",
+		ko: "계획만 삭제합니다. 이미 만든 백업과 그 기록은 목록과 디스크에 그대로 남으며, 삭제한 계획의 백업을 OwnGit이 자동으로 지우지는 않습니다.",
+	},
+	MsgBackupPlanCreated: {
+		en: "Created the backup plan.",
+		ko: "백업 계획을 만들었습니다.",
+	},
+	MsgBackupPlanDeleted: {
+		en: "Deleted the backup plan. Its backups and their records stay listed and on disk; delete them by hand when they are no longer needed.",
+		ko: "백업 계획을 삭제했습니다. 백업과 기록은 목록과 디스크에 그대로 남으니, 필요 없어지면 직접 삭제하세요.",
+	},
+	MsgBackupPlanChoose: {
+		en: "Choose the plan to view or change",
+		ko: "보거나 변경할 계획을 선택하세요",
+	},
+	MsgBackupActiveRefused: {
+		en: "The plan is still making a backup. Wait for it to finish, then delete it.",
+		ko: "계획의 백업이 아직 진행 중입니다. 끝날 때까지 기다린 다음 삭제하세요.",
+	},
+	MsgBackupPlanExistsRefused: {
+		en: "A backup plan with this name already exists.",
+		ko: "같은 이름의 백업 계획이 이미 있습니다.",
+	},
+	MsgBackupPlanMissingRefused: {
+		en: "The backup plan does not exist.",
+		ko: "백업 계획이 존재하지 않습니다.",
+	},
+	MsgBackupPlanLimitRefused: {
+		en: "There are already as many backup plans as OwnGit keeps.",
+		ko: "저장 가능한 백업 계획 수가 이미 가득 찼습니다.",
 	},
 	MsgBackupStateTitle: {
 		en: "Current state",

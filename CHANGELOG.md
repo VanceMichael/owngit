@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Multiple named backup plans. OwnGit now keeps up to 50 backup plans, each with its own destination, interval, retention and verify setting, so one OwnGit can back up to both a local disk and, for example, an offline or mounted drive. Plans are managed in Settings, Storage & recovery, Backups and with `owngit backup plan list|create|delete`; `backup now`, `status`, `runs` and `schedule show|set|off` take `--plan NAME`. Every run and API response names its plan. The one backup slot stays global, and the scheduler starts due plans by due time then stable plan order; retention and room estimates are per plan even when plans share a folder, so plans never remove each other's backups. Deleting an idle plan removes only its configuration and leaves its backups and history inspectable; deleting a plan with a running backup is refused. The pre-existing schedule and all calls without `--plan` keep working as the `default` plan.
+
 ## [1.1.7] - 2026-10-09
 
 This release fixes security problems rated Medium and Low by building OwnGit with Go 1.27.2. It has no other changes. Upgrading is recommended.

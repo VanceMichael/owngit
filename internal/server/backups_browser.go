@@ -114,29 +114,41 @@ func (app *App) backupsInfo(request *http.Request, settings state.Settings, visi
 	if err != nil {
 		return info, err
 	}
-	runs, err := app.Backups.Runs(request.Context())
-	if err != nil {
-		return info, err
+	selected := selectedBackupPlan(request, status)
+	info.SelectedPlan = selected
+	for _, plan := range status.Plans {
+		info.Plans = append(info.Plans, webui.BackupPlanInfo{Name: plan.Plan, State: plan.Schedule.State, Selected: plan.Plan == selected})
 	}
-	schedule := status.Schedule
-	info.Configured = schedule.State != backups.ScheduleNotConfigured
-	info.Scheduled, info.Interval, info.Keep, info.Verify = true, backups.IntervalName(backups.DefaultInterval), backups.DefaultKeep, true
-	if info.Configured {
-		info.Scheduled, info.Destination, info.Interval, info.Keep, info.Verify = schedule.State == backups.ScheduleOn, schedule.Destination, schedule.Interval, schedule.Keep, *schedule.Verify
-	}
+	info.ChoosePlans = len(status.Plans) > 1
 	for _, choice := range backups.Intervals {
 		info.Intervals = append(info.Intervals, choice.Name)
 	}
-	info.Running, info.LastRun, info.LastVerified = app.backupRun(status.Running, settings), app.backupRun(status.LastRun, settings), app.backupRun(status.LastVerified, settings)
-	if next := status.NextRun; next != nil {
-		info.NextRun = *next
-		info.NextRunNow = status.Running != nil && !next.After(app.now())
+	var selectedView *backups.PlanStatusView
+	for index := range status.Plans {
+		if status.Plans[index].Plan == selected {
+			selectedView = &status.Plans[index]
+			break
+		}
 	}
-	if limit := status.RestoreLimit; limit != nil {
-		info.RestoreLimit = limit.FileSystem
-	}
-	for index := range runs {
-		info.Runs = append(info.Runs, *app.backupRun(&runs[index], settings))
+	if selectedView != nil {
+		schedule := selectedView.Schedule
+		info.Configured = true
+		info.Scheduled, info.Destination, info.Interval, info.Keep, info.Verify = schedule.State == backups.ScheduleOn, schedule.Destination, schedule.Interval, schedule.Keep, *schedule.Verify
+		info.Running, info.LastRun, info.LastVerified = app.backupRun(selectedView.Running, settings), app.backupRun(selectedView.LastRun, settings), app.backupRun(selectedView.LastVerified, settings)
+		if next := selectedView.NextRun; next != nil {
+			info.NextRun = *next
+			info.NextRunNow = selectedView.Running != nil && !next.After(app.now())
+		}
+		if limit := selectedView.RestoreLimit; limit != nil {
+			info.RestoreLimit = limit.FileSystem
+		}
+		runs, err := app.Backups.RunsOfPlan(request.Context(), selected)
+		if err != nil {
+			return info, err
+		}
+		for index := range runs {
+			info.Runs = append(info.Runs, *app.backupRun(&runs[index], settings))
+		}
 	}
 	if check := status.Check; check != nil {
 		info.Check = &webui.BackupCheckInfo{Name: check.BackupName, Status: check.Status, Message: check.Message, MessageKO: backupMessageKO(check.Message)}
@@ -150,9 +162,32 @@ func (app *App) backupsInfo(request *http.Request, settings state.Settings, visi
 			info.Upload.Restore = app.restoreGuide(upload.Path, settings)
 		}
 	}
-	info.Busy = status.Running != nil || status.Check != nil && status.Check.Status == backups.CheckRunning ||
-		status.Upload != nil && status.Upload.Status == backups.UploadVerifying
+	info.Busy = globalBackupBusy(status)
 	return info, nil
+}
+
+// globalBackupBusy says whether anything occupies the one backup slot.
+func globalBackupBusy(status backups.Status) bool {
+	for _, plan := range status.Plans {
+		if plan.Running != nil {
+			return true
+		}
+	}
+	return status.Check != nil && status.Check.Status == backups.CheckRunning ||
+		status.Upload != nil && status.Upload.Status == backups.UploadVerifying
+}
+
+// selectedBackupPlan is the plan the storage page shows: the one its query
+// names when it still exists, otherwise the default plan.
+func selectedBackupPlan(request *http.Request, status backups.Status) string {
+	if name := strings.TrimSpace(request.URL.Query().Get("backup_plan")); name != "" {
+		for _, plan := range status.Plans {
+			if plan.Plan == name {
+				return name
+			}
+		}
+	}
+	return state.DefaultBackupPlanName
 }
 
 // backupRun describes a run for the dashboard, with how to restore its
@@ -162,7 +197,7 @@ func (app *App) backupRun(run *backups.RunView, settings state.Settings) *webui.
 		return nil
 	}
 	info := &webui.BackupRunInfo{
-		ID: run.ID, Kind: run.Kind, Status: run.Status, Verification: run.Verification, Name: run.BackupName, Path: run.Path,
+		ID: run.ID, Plan: run.Plan, Kind: run.Kind, Status: run.Status, Verification: run.Verification, Name: run.BackupName, Path: run.Path,
 		Message: run.Message, StartedAt: run.StartedAt, HoldRepository: run.LongestHoldRepository,
 	}
 	if ko := backupMessageKO(info.Message); ko != info.Message {
@@ -233,6 +268,8 @@ var backupNotices = map[string][]webui.Notice{
 	"backup_started":              {webui.Success(webui.MsgBackupStarted)},
 	"backup_check_started":        {webui.Success(webui.MsgBackupCheckStarted)},
 	"backup_upload_received":      {webui.Success(webui.MsgBackupUploadReceived)},
+	"backup_plan_created":         {webui.Success(webui.MsgBackupPlanCreated)},
+	"backup_plan_deleted":         {webui.Success(webui.MsgBackupPlanDeleted)},
 }
 
 // backupNoticeGroup is the group that shows a backup result notice, or "".
@@ -240,7 +277,7 @@ func backupNoticeGroup(notice string) string {
 	switch {
 	case backupNotices[notice] == nil:
 		return ""
-	case strings.HasPrefix(notice, "backup_saved"):
+	case strings.HasPrefix(notice, "backup_saved"), notice == "backup_plan_created", notice == "backup_plan_deleted":
 		return webui.GroupBackups
 	}
 	return webui.GroupBackupRuns
@@ -260,6 +297,36 @@ func (app *App) backupAction(writer http.ResponseWriter, request *http.Request, 
 		refuse(unavailable(request, step, err), webui.Error("", webui.MsgBackupFailed))
 	}
 	switch action {
+	case webui.ActionCreateBackupPlan:
+		app.backupCreatePlan(writer, request, settings, refuse, action)
+	case webui.ActionDeleteBackupPlan:
+		name := strings.TrimSpace(postValue(request, "backup_plan"))
+		if err := app.Backups.DeletePlan(request.Context(), name); err != nil {
+			answerBackupPlanError(err, name, "", refuse, request, "backup plan delete")
+			return
+		}
+		app.settingsSaved(writer, request, backupPlanResultURL(action, "backup_plan_deleted", ""))
+	case webui.ActionSaveBackupPlan:
+		name := strings.TrimSpace(postValue(request, "backup_plan"))
+		if name == "" {
+			name = state.DefaultBackupPlanName
+		}
+		change, notices := backupScheduleForm(request)
+		if len(notices) > 0 {
+			refuse(http.StatusUnprocessableEntity, notices...)
+			return
+		}
+		plan, err := app.Backups.ChangePlan(request.Context(), name, change)
+		var refused *backups.ChangeError
+		if errors.As(err, &refused) {
+			refuse(http.StatusUnprocessableEntity, scheduleRefusal(refused))
+			return
+		}
+		if err != nil {
+			answerBackupPlanError(err, name, "", refuse, request, "backup plan save")
+			return
+		}
+		app.settingsSaved(writer, request, backupPlanResultURL(action, "backup_saved", plan.Name))
 	case webui.ActionSaveBackupSchedule:
 		change, notices := backupScheduleForm(request)
 		if len(notices) > 0 {
@@ -285,11 +352,18 @@ func (app *App) backupAction(writer http.ResponseWriter, request *http.Request, 
 		}
 		app.settingsSaved(writer, request, settingsResultURL(action, notice))
 	case webui.ActionBackupNow:
-		if _, err := app.Backups.StartNow(); err != nil {
+		name := strings.TrimSpace(postValue(request, "backup_plan"))
+		var err error
+		if name != "" {
+			_, err = app.Backups.StartPlanNow(name)
+		} else {
+			_, err = app.Backups.StartNow()
+		}
+		if err != nil {
 			answer(err, "backup start")
 			return
 		}
-		app.settingsSaved(writer, request, settingsResultURL(action, "backup_started"))
+		app.settingsSaved(writer, request, backupPlanResultURL(action, "backup_started", name))
 	case webui.ActionBackupVerify:
 		if _, err := app.Backups.StartCheck(request.Context(), request.URL.Query().Get("run")); err != nil {
 			answer(err, "backup verification start")
@@ -304,6 +378,86 @@ func (app *App) backupAction(writer http.ResponseWriter, request *http.Request, 
 		}
 		app.writeBackupArchive(writer, request, download)
 	}
+}
+
+// backupCreatePlan handles the new-plan form: a name and a folder, both
+// required, with the service applying the defaults.
+func (app *App) backupCreatePlan(writer http.ResponseWriter, request *http.Request, settings state.Settings, refuse func(int, ...webui.Notice), action string) {
+	name := strings.TrimSpace(postValue(request, "backup_new_plan"))
+	destination := strings.TrimSpace(postValue(request, "backup_new_destination"))
+	if name == "" {
+		refuse(http.StatusUnprocessableEntity, webui.Error("backup_new_plan", webui.MsgBackupPlanName).WithDetail("The plan name is required."))
+		return
+	}
+	if err := state.ValidateBackupPlanName(name); err != nil {
+		refuse(http.StatusUnprocessableEntity, webui.Error("backup_new_plan", webui.MsgBackupPlanName).WithDetail(err.Error()))
+		return
+	}
+	if destination == "" {
+		refuse(http.StatusUnprocessableEntity, webui.Error("backup_new_destination", webui.MsgBackupChooseFolder))
+		return
+	}
+	plan, err := app.Backups.CreatePlan(request.Context(), name, backups.ScheduleChange{Destination: &destination})
+	var refused *backups.ChangeError
+	if errors.As(err, &refused) {
+		refuse(http.StatusUnprocessableEntity, planCreationRefusal(refused))
+		return
+	}
+	if err != nil {
+		answerBackupPlanError(err, name, "backup_new_plan", refuse, request, "backup plan create")
+		return
+	}
+	app.settingsSaved(writer, request, backupPlanResultURL(action, "backup_plan_created", plan.Name))
+}
+
+// planCreationRefusal words a refusal while creating a plan at the right
+// field: the folder errors belong to the new destination field.
+func planCreationRefusal(refused *backups.ChangeError) webui.Notice {
+	switch refused.Reason {
+	case "", backups.ReasonChooseFolder:
+		return webui.Error("backup_new_destination", webui.MsgBackupChooseFolder)
+	case backups.ReasonNotAbsolute:
+		return webui.Error("backup_new_destination", webui.MsgBackupFolderNotAbsolute)
+	case backups.ReasonFolderOverlaps:
+		return webui.Error("backup_new_destination", webui.MsgBackupFolderOverlaps)
+	case backups.ReasonFolderUnusable:
+		return webui.Error("backup_new_destination", webui.MsgBackupFolderUnusable).WithDetail(refused.Detail)
+	}
+	return webui.Error("backup_new_plan", webui.MsgBackupScheduleRefused).WithDetail(refused.Message)
+}
+
+// answerBackupPlanError maps the plan service's sentinel refusals to
+// dashboard notices; nameField names a name field for a name error.
+func answerBackupPlanError(err error, name, nameField string, refuse func(int, ...webui.Notice), request *http.Request, step string) {
+	var notice webui.Notice
+	switch {
+	case errors.Is(err, backups.ErrPlanNotFound):
+		notice = webui.Error(nameField, webui.MsgBackupPlanMissingRefused)
+	case errors.Is(err, backups.ErrPlanExists):
+		notice = webui.Error("backup_new_plan", webui.MsgBackupPlanExistsRefused)
+	case errors.Is(err, backups.ErrPlanActive):
+		notice = webui.Error("", webui.MsgBackupActiveRefused)
+	case errors.Is(err, backups.ErrPlanLimit):
+		notice = webui.Error("", webui.MsgBackupPlanLimitRefused)
+	default:
+		if refusal, ok := backupRefused(err); ok {
+			refuse(refusal.status, refusal.notice())
+			return
+		}
+		refuse(unavailable(request, step, err), webui.Error("", webui.MsgBackupFailed))
+		return
+	}
+	refuse(http.StatusConflict, notice)
+}
+
+// backupPlanResultURL is the result URL for a plan action, keeping the
+// selected plan in view when one is named.
+func backupPlanResultURL(action, notice, plan string) string {
+	target := settingsResultURL(action, notice)
+	if plan != "" {
+		target += "&backup_plan=" + url.QueryEscape(plan)
+	}
+	return target
 }
 
 // scheduleRefusal is a refused schedule change for the dashboard: worded

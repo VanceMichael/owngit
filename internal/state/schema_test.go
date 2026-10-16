@@ -83,11 +83,11 @@ func TestUnsupportedSchemaInCommittedWALPreservesSource(t *testing.T) {
 	assertSchemaDirectoryUnchanged(t, directory, before)
 }
 
-// currentSchemaFingerprint pins the catalog of schema 17. A changed migration
+// currentSchemaFingerprint pins the catalog of schema 18. A changed migration
 // statement changes it, so the current schema cannot drift unnoticed.
 const (
-	currentSchemaFingerprint = "e7be8d4eed5be2517525cd0ef44faec3523f875a7bc3bc305e218093903cc12e"
-	currentSchemaObjects     = 138
+	currentSchemaFingerprint = "95c56cfab62874eddd4308cde43928534f2e9778c7956239506e00b3acc3d593"
+	currentSchemaObjects     = 140
 )
 
 func TestFreshSchemaOpen(t *testing.T) {
@@ -220,7 +220,7 @@ func TestCommittedBaselineSchemaUpgradesInPlace(t *testing.T) {
 		t.Fatalf("open committed baseline: %v", err)
 	}
 	defer store.Close()
-	if upgrade := store.SchemaUpgrade(); upgrade != "state database upgraded from the committed baseline (no schema version) to schema 17" {
+	if upgrade := store.SchemaUpgrade(); upgrade != "state database upgraded from the committed baseline (no schema version) to schema 18" {
 		t.Fatalf("baseline upgrade reported %q", upgrade)
 	}
 	if version, _, err := readSchemaVersion(ctx, store.db); err != nil || version != currentSchemaVersion() {
@@ -285,9 +285,9 @@ func TestUnsupportedNumberedSchemasAreRefusedWithoutWrites(t *testing.T) {
 			if store != nil {
 				_ = store.Close()
 			}
-			want := "state database uses the unreleased development schema " + strconv.Itoa(version) + "; this build upgrades only the committed baseline (no schema version) and released schemas 14, 15 and 16, and opens schema 17"
+			want := "state database uses the unreleased development schema " + strconv.Itoa(version) + "; this build upgrades only the committed baseline (no schema version) and released schemas 14, 15 and 16, and opens schema 18"
 			if version > currentSchemaVersion() {
-				want = "state database schema version 99 is newer than this OwnGit build supports (17)"
+				want = "state database schema version 99 is newer than this OwnGit build supports (18)"
 			}
 			if err == nil || err.Error() != want {
 				t.Fatalf("schema %d error=%v", version, err)

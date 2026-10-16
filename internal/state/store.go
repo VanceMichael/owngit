@@ -1757,6 +1757,29 @@ var schemaSteps = []schemaStep{
 		)`,
 		`CREATE INDEX actions_schedules_due ON actions_schedules(next_due_at)`,
 	}},
+	// Schema 18 turns the one backup schedule into uniquely named backup
+	// plans. The schedule a released build wrote becomes the plan named
+	// "default", and the runs that the single schedule made belong to it.
+	// Runs keep their global one-running index across all plans: only one
+	// backup, verification or upload runs at a time. Plans and runs stay
+	// machine-local, like the singleton schedule they replace.
+	{version: 18, statements: []string{
+		`CREATE TABLE backup_plans (
+			name TEXT PRIMARY KEY CHECK (length(CAST(name AS BLOB)) BETWEEN 1 AND 64 AND name GLOB '[A-Za-z0-9_-]*'),
+			enabled INTEGER NOT NULL CHECK (enabled IN (0,1)),
+			interval_seconds INTEGER NOT NULL CHECK (interval_seconds BETWEEN 3600 AND 2592000),
+			destination TEXT NOT NULL CHECK (length(CAST(destination AS BLOB)) BETWEEN 1 AND 4096),
+			keep INTEGER NOT NULL CHECK (keep BETWEEN 1 AND 1000),
+			verify INTEGER NOT NULL DEFAULT 1 CHECK (verify IN (0,1)),
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`INSERT INTO backup_plans(name,enabled,interval_seconds,destination,keep,verify,created_at,updated_at)
+			SELECT 'default',enabled,interval_seconds,destination,keep,verify,updated_at,updated_at FROM backup_schedule`,
+		`DROP TABLE backup_schedule`,
+		`ALTER TABLE backup_runs ADD COLUMN plan TEXT NOT NULL DEFAULT 'default' CHECK (length(CAST(plan AS BLOB)) BETWEEN 1 AND 64)`,
+		`CREATE INDEX backup_runs_plan ON backup_runs(plan,started_at,id)`,
+	}},
 }
 
 // Exec runs one statement against the state database. It is used for targeted

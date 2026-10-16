@@ -92,6 +92,93 @@ func TestBackupCommandsTalkToTheServer(t *testing.T) {
 	}
 }
 
+// The backup plan commands manage named plans, and the existing commands
+// address one plan with --plan; the calls without --plan keep using the
+// default plan.
+func TestBackupPlanCommands(t *testing.T) {
+	serverURL, _ := startRepositoryCLIServer(t, "")
+	adminFile := filepath.Join(t.TempDir(), "admin-password")
+	noErr(t, os.WriteFile(adminFile, []byte("admin-password\n"), 0o600))
+	noErr(t, state.ProtectPrivatePath(adminFile, false))
+	remote := []string{"--server", serverURL, "--accept-insecure-http", "--password-file", adminFile}
+	command := func(arguments ...string) []string { return append(arguments, remote...) }
+
+	if output := cliOutput(t, backupState, command("plan", "list")...); !strings.Contains(output, `"plans":[]`) {
+		t.Fatalf("plan list before creating: %s", output)
+	}
+	// Local argument validation never reaches the server.
+	if _, err := captureStdout(func() error { return backupState(command("plan", "create", "--destination", t.TempDir())) }); err == nil {
+		t.Fatal("plan create without --name was accepted")
+	}
+	if _, err := captureStdout(func() error { return backupState(command("plan", "create", "--name", "off site", "--destination", t.TempDir())) }); err == nil {
+		t.Fatal("plan create with a bad name was accepted")
+	}
+	destination := filepath.Join(t.TempDir(), "offline-backups")
+	output := cliOutput(t, backupState, command("plan", "create", "--name", "offsite", "--destination", destination, "--keep", "3", "--verify", "off", "--scheduled", "off")...)
+	if !strings.Contains(output, `"plan":"offsite"`) || !strings.Contains(output, `"state":"off"`) || !strings.Contains(output, `"keep":3`) {
+		t.Fatalf("plan create: %s", output)
+	}
+	_, err := captureStdout(func() error { return backupState(command("plan", "create", "--name", "offsite", "--destination", destination)) })
+	var problem *apiclient.Error
+	if !errors.As(err, &problem) || problem.Code != "backup_plan_exists" {
+		t.Fatalf("a duplicate plan: %v", err)
+	}
+	// Change and read the plan through the schedule commands with --plan.
+	// "set" turns scheduling on, so turn it straight back off and wait for
+	// any run it could start before deleting the plan.
+	if output := cliOutput(t, backupState, command("schedule", "set", "--plan", "offsite", "--keep", "4")...); !strings.Contains(output, `"keep":4`) {
+		t.Fatalf("schedule set --plan: %s", output)
+	}
+	cliOutput(t, backupState, command("schedule", "off", "--plan", "offsite")...)
+	waitForPlanRunsIdle(t, backupState, command)
+	if output := cliOutput(t, backupState, command("schedule", "show", "--plan", "offsite")...); !strings.Contains(output, `"plan":"offsite"`) || !strings.Contains(output, `"state":"off"`) || !strings.Contains(output, `"keep":4`) {
+		t.Fatalf("schedule show --plan: %s", output)
+	}
+	if output := cliOutput(t, backupState, command("status", "--plan", "offsite")...); !strings.Contains(output, `"plan":"offsite"`) {
+		t.Fatalf("status --plan: %s", output)
+	}
+	if output := cliOutput(t, backupState, command("runs", "--plan", "offsite")...); !strings.HasPrefix(output, `{"ok":true,"runs":[`) {
+		t.Fatalf("runs --plan: %s", output)
+	}
+	// Starting a plan that does not exist names it; a bad query is refused.
+	_, err = captureStdout(func() error { return backupState(command("now", "--plan", "missing")) })
+	if !errors.As(err, &problem) || problem.Code != "backup_plan_not_found" {
+		t.Fatalf("backing up a missing plan: %v", err)
+	}
+	// The default plan is still absent, so a call without --plan keeps the
+	// old answer.
+	_, err = captureStdout(func() error { return backupState(command("now")) })
+	if !errors.As(err, &problem) || problem.Code != "backup_not_configured" {
+		t.Fatalf("back up now without a plan: %v", err)
+	}
+	// The idle plan deletes; deleting it again says it is missing.
+	if output := cliOutput(t, backupState, command("plan", "delete", "--name", "offsite")...); !strings.Contains(output, `"plan":"offsite"`) {
+		t.Fatalf("plan delete: %s", output)
+	}
+	_, err = captureStdout(func() error { return backupState(command("plan", "delete", "--name", "offsite")) })
+	if !errors.As(err, &problem) || problem.Code != "backup_plan_not_found" {
+		t.Fatalf("deleting the plan again: %v", err)
+	}
+}
+
+// waitForPlanRunsIdle polls the offsite plan's runs through the CLI until
+// no run of it is running.
+func waitForPlanRunsIdle(t *testing.T, state func([]string) error, command func(...string) []string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		output, err := captureStdout(func() error { return state(command("runs", "--plan", "offsite")) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output, `"status":"running"`) {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("the offsite run did not finish")
+}
+
 // A serving OwnGit records a backup that a stopped process left running as
 // interrupted, does not repeat its scheduled slot, and makes a verified
 // backup when asked.

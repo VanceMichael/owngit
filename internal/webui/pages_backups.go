@@ -16,6 +16,15 @@ const (
 	// backup_destination, backup_scheduled and backup_verify (switches),
 	// backup_interval (one of BackupsInfo.Intervals), backup_keep.
 	ActionSaveBackupSchedule = "save_backup_schedule"
+	// ActionSaveBackupPlan saves the selected plan. Fields: backup_plan
+	// plus the destination, switch, interval and keep fields.
+	ActionSaveBackupPlan = "save_backup_plan"
+	// ActionCreateBackupPlan creates a plan: backup_new_plan and
+	// backup_new_destination.
+	ActionCreateBackupPlan = "create_backup_plan"
+	// ActionDeleteBackupPlan deletes the plan named backup_plan while it is
+	// idle.
+	ActionDeleteBackupPlan = "delete_backup_plan"
 	// ActionBackupNow starts a backup.
 	ActionBackupNow = "backup_now"
 	// ActionBackupVerify verifies a listed backup again, and
@@ -32,28 +41,47 @@ const (
 	GroupBackupRuns = "backup_runs"
 )
 
+// BackupPlanInfo is one named plan in the plan chooser.
+type BackupPlanInfo struct {
+	// Name is the plan's stable name.
+	Name string
+	// State is the plan's state, on or off.
+	State string
+	// Selected marks the plan the page shows.
+	Selected bool
+}
+
 // BackupsInfo is the Backups group.
 type BackupsInfo struct {
 	// Visible is true for a confirmed administrator, who alone sees and
 	// changes backups: the rest is empty otherwise.
 	Visible bool
-	// Configured is false before a backup folder is set.
+	// Configured is false when the plan the page shows has no folder yet.
 	Configured bool
-	// Scheduled, Destination, Interval, Keep and Verify are the saved
-	// schedule; Interval is one of Intervals.
+	// SelectedPlan is the plan the page shows; it is default when the URL
+	// names none.
+	SelectedPlan string
+	// Plans are the saved plans, in their stable order.
+	Plans []BackupPlanInfo
+	// ChoosePlans is true when more than one plan exists and the chooser is
+	// shown.
+	ChoosePlans bool
+	// Scheduled, Destination, Interval, Keep and Verify are the selected
+	// plan's schedule; Interval is one of Intervals.
 	Scheduled   bool
 	Destination string
 	Interval    string
 	Keep        int
 	Verify      bool
 	Intervals   []string
-	// Running is the backup that runs, if any.
+	// Running is the selected plan's backup that runs, if any.
 	Running *BackupRunInfo
 	// LastRun is the last backup that ended, and LastVerified the newest
-	// verified one that OwnGit keeps.
+	// verified one that OwnGit keeps, of the selected plan.
 	LastRun, LastVerified *BackupRunInfo
-	// NextRun is when the next scheduled backup is due; zero when none is.
-	// NextRunNow says it is due as soon as the running backup ends.
+	// NextRun is when the selected plan's next scheduled backup is due;
+	// zero when none is. NextRunNow says it is due as soon as the running
+	// backup ends.
 	NextRun    time.Time
 	NextRunNow bool
 	// Busy is true while a backup, a verification or an upload runs, when
@@ -62,7 +90,8 @@ type BackupsInfo struct {
 	// RestoreLimit names the file system of the backup folder when a
 	// restore cannot write into a folder on it.
 	RestoreLimit string
-	// Runs are the recorded backups, the newest first.
+	// Runs are the recorded backups of the plan the page shows, newest
+	// first.
 	Runs []BackupRunInfo
 	// Check is the last verification an owner asked for.
 	Check *BackupCheckInfo
@@ -73,6 +102,8 @@ type BackupsInfo struct {
 // BackupRunInfo is one recorded backup.
 type BackupRunInfo struct {
 	ID string
+	// Plan names the plan that started the run.
+	Plan string
 	// Kind is scheduled or manual; Status running, succeeded, failed or
 	// interrupted; Verification passed, failed or not_run.
 	Kind, Status, Verification string

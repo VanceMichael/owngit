@@ -2,16 +2,13 @@ package backups
 
 import (
 	"context"
-	"errors"
-	"path/filepath"
 	"time"
 
-	"owngit/internal/recovery"
 	"owngit/internal/state"
 )
 
-// ScheduleChange names the parts of the schedule to change; nil leaves a
-// part as it is.
+// ScheduleChange names the parts of one plan to change; nil leaves a part
+// as it is.
 type ScheduleChange struct {
 	Destination *string
 	Enabled     *bool
@@ -20,7 +17,7 @@ type ScheduleChange struct {
 	Verify      *bool
 }
 
-// ChangeError is a schedule change that cannot be saved as asked.
+// ChangeError is a plan change that cannot be saved as asked.
 type ChangeError struct {
 	// Message is the whole refusal in English, for the API and logs.
 	Message string
@@ -37,71 +34,49 @@ const (
 	ReasonFolderOverlaps = "folder_overlaps"
 )
 
-func folderUnusable(err error) *ChangeError {
-	if errors.Is(err, recovery.ErrBackupOverlapsStorage) {
-		return &ChangeError{Message: "The backup folder cannot be used: " + err.Error() + ".", Reason: ReasonFolderOverlaps}
-	}
-	return &ChangeError{"The backup folder cannot be used: " + err.Error() + ".", ReasonFolderUnusable, err.Error()}
-}
-
 func (e *ChangeError) Error() string { return e.Message }
 
-// ChangeSchedule saves change and returns the schedule before it
-// (configured false when there was none) and after it. The first change
-// must set a backup folder; the rest starts at the defaults: on, daily,
-// seven backups kept and each one verified. A new folder must be an
-// absolute path that no backup would overlap OwnGit's storage in; it is
-// created, private to this account, when missing.
+// ChangeSchedule saves change to the plan named default and returns the
+// plan before it (configured false when there was none) and after it. It
+// keeps the schedule, status, runs and "back up now" calls that predate
+// named plans working: their plan is default, created with the old
+// defaults on the first change, which must set a backup folder.
 func (s *Service) ChangeSchedule(ctx context.Context, change ScheduleChange) (before state.BackupSchedule, configured bool, after state.BackupSchedule, err error) {
-	before, configured, err = s.Store.BackupSchedule(ctx)
+	existing, found, err := s.Store.BackupPlan(ctx, state.DefaultBackupPlanName)
 	if err != nil {
-		return before, configured, after, err
+		return before, false, after, err
 	}
-	after = before
-	if !configured {
+	if found {
+		before, configured = existing.BackupSchedule, true
+	}
+	if !found {
 		if change.Destination == nil {
 			return before, configured, after, &ChangeError{Message: "Choose a backup folder first.", Reason: ReasonChooseFolder}
 		}
-		after = state.BackupSchedule{Enabled: true, Interval: DefaultInterval, Keep: DefaultKeep, Verify: true}
-	}
-	if change.Destination != nil {
-		destination := *change.Destination
-		if !filepath.IsAbs(destination) {
-			return before, configured, after, &ChangeError{Message: "The backup folder must be an absolute path.", Reason: ReasonNotAbsolute}
+		now := s.now()
+		existing = state.BackupPlan{
+			Name: state.DefaultBackupPlanName,
+			BackupSchedule: state.BackupSchedule{
+				Enabled: true, Interval: DefaultInterval, Keep: DefaultKeep, Verify: true, UpdatedAt: now,
+			},
+			CreatedAt: now,
 		}
-		destination = filepath.Clean(destination)
-		if err := recovery.CheckBackupFolder(s.Store, s.Repositories, destination); err != nil {
-			return before, configured, after, folderUnusable(err)
-		}
-		area, err := state.OpenStagingArea(destination)
-		if err != nil {
-			return before, configured, after, folderUnusable(err)
-		}
-		area.Close()
-		after.Destination = destination
+	} else {
+		existing.UpdatedAt = s.now()
 	}
-	if change.Enabled != nil {
-		after.Enabled = *change.Enabled
+	updated, cerr := applyPlanChange(existing, change)
+	if cerr != nil {
+		return before, configured, after, cerr
 	}
-	if change.Interval != nil {
-		after.Interval = *change.Interval
+	if err := s.checkPlanFolder(ctx, updated.BackupSchedule); err != nil {
+		return before, configured, after, err
 	}
-	if change.Keep != nil {
-		after.Keep = *change.Keep
-	}
-	if change.Verify != nil {
-		after.Verify = *change.Verify
-	}
-	after.UpdatedAt = s.now()
-	if err := state.ValidateBackupSchedule(after); err != nil {
-		return before, configured, after, &ChangeError{Message: err.Error() + "."}
-	}
-	if err := s.Store.SaveBackupSchedule(ctx, after); err != nil {
+	if err := s.Store.SaveBackupPlan(ctx, updated); err != nil {
 		return before, configured, after, err
 	}
 	s.Wake()
 	if change.Destination != nil {
-		s.noteRestoreLimit(after.Destination)
+		s.noteRestoreLimit(updated.Destination)
 	}
-	return before, configured, after, nil
+	return before, configured, updated.BackupSchedule, nil
 }

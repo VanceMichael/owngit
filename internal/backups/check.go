@@ -282,8 +282,9 @@ type RestoreLimit struct {
 }
 
 // noteRestoreLimit finds out whether a restore could write into
-// destination and keeps the answer for Status. A folder that cannot be
-// tested keeps the last answer.
+// destination and keeps the answer for that destination's plans. Plans
+// with different folders keep their own answers. A folder that cannot be
+// tested keeps its last answer.
 func (s *Service) noteRestoreLimit(destination string) {
 	fileSystem, err := recovery.RestoreLimit(destination)
 	if err != nil {
@@ -292,21 +293,26 @@ func (s *Service) noteRestoreLimit(destination string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.limit = nil
-	if fileSystem != "" {
-		s.limit = &RestoreLimit{Destination: destination, FileSystem: fileSystem}
+	if s.limits == nil {
+		s.limits = map[string]*RestoreLimit{}
 	}
+	if fileSystem == "" {
+		delete(s.limits, destination)
+		return
+	}
+	s.limits[destination] = &RestoreLimit{Destination: destination, FileSystem: fileSystem}
 }
 
 // restoreLimit is the kept answer for destination, or nil.
 func (s *Service) restoreLimit(destination string) *RestoreLimit {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.limit == nil || s.limit.Destination != destination {
+	limit := s.limits[destination]
+	if limit == nil {
 		return nil
 	}
-	limit := *s.limit
-	return &limit
+	result := *limit
+	return &result
 }
 
 // joinSentences joins two messages, either of which may be empty.

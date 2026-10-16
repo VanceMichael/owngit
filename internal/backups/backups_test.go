@@ -101,6 +101,18 @@ func (f *fixture) configure(t *testing.T, change ScheduleChange) state.BackupSch
 	return after
 }
 
+// plan returns the default plan as it is saved, the frozen configuration a
+// run started now would take.
+func (f *fixture) plan(t *testing.T) state.BackupPlan {
+	t.Helper()
+	plan, configured, err := f.store.BackupPlan(context.Background(), state.DefaultBackupPlanName)
+	noErr(t, err)
+	if !configured {
+		t.Fatal("the default plan is not configured")
+	}
+	return plan
+}
+
 // backUpNow starts a backup, waits for it to end, and returns its record.
 // Every backup starts an hour after the one before.
 func (f *fixture) backUpNow(t *testing.T) state.BackupRun {
@@ -306,10 +318,10 @@ func TestRestartRecordsARunningBackupAsInterrupted(t *testing.T) {
 	if run.Status != state.BackupInterrupted || run.Verification != state.BackupVerifyNotRun || run.Message != InterruptedMessage || run.FinishedAt.IsZero() {
 		t.Fatalf("left run: %+v", run)
 	}
-	next, err := f.service.nextRun(context.Background())
+	timings, err := f.service.planTimings(context.Background())
 	noErr(t, err)
-	if !next.Equal(left.StartedAt.Add(24 * time.Hour)) {
-		t.Fatalf("next scheduled backup %s, want one interval after the interrupted one", next)
+	if len(timings) != 1 || !timings[0].due.Equal(left.StartedAt.Add(24 * time.Hour)) {
+		t.Fatalf("next scheduled backup %+v, want one interval after the interrupted one", timings)
 	}
 }
 
@@ -317,13 +329,13 @@ func TestRestartRecordsARunningBackupAsInterrupted(t *testing.T) {
 // is published.
 func TestStoppedBackupIsInterrupted(t *testing.T) {
 	f := newFixture(t)
-	schedule := f.configure(t, ScheduleChange{})
-	run := state.BackupRun{ID: strings.Repeat("c", 32), Kind: state.BackupRunManual, Status: state.BackupRunning, Destination: f.destination,
+	f.configure(t, ScheduleChange{})
+	run := state.BackupRun{ID: strings.Repeat("c", 32), Plan: state.DefaultBackupPlanName, Kind: state.BackupRunManual, Status: state.BackupRunning, Destination: f.destination,
 		BackupName: namePrefix + "stopped", Verification: state.BackupVerifyNotRun, StartedAt: f.clock.Now()}
 	noErr(t, f.store.StartBackupRun(context.Background(), run))
 	stopped, cancel := context.WithCancel(context.Background())
 	cancel()
-	f.service.execute(stopped, run, schedule)
+	f.service.execute(stopped, run, f.plan(t))
 	run = f.run(t, run.ID)
 	if run.Status != state.BackupInterrupted || present(run) {
 		t.Fatalf("stopped run: %+v, published %v", run, present(run))
@@ -343,14 +355,14 @@ func TestStoppedBackupRecordsOnlyBeforeTheStopDeadline(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			f := newFixture(t)
-			schedule := f.configure(t, ScheduleChange{})
-			run := state.BackupRun{ID: strings.Repeat("d", 32), Kind: state.BackupRunManual, Status: state.BackupRunning, Destination: f.destination,
+			f.configure(t, ScheduleChange{})
+			run := state.BackupRun{ID: strings.Repeat("d", 32), Plan: state.DefaultBackupPlanName, Kind: state.BackupRunManual, Status: state.BackupRunning, Destination: f.destination,
 				BackupName: namePrefix + "deadline", Verification: state.BackupVerifyNotRun, StartedAt: f.clock.Now()}
 			noErr(t, f.store.StartBackupRun(context.Background(), run))
 			f.service.StopBy = func() time.Time { return time.Now().Add(test.stopBy) }
 			stopped, cancel := context.WithCancel(context.Background())
 			cancel()
-			f.service.execute(stopped, run, schedule)
+			f.service.execute(stopped, run, f.plan(t))
 			if got := f.run(t, run.ID).Status; got != test.want {
 				t.Fatalf("status %s, want %s", got, test.want)
 			}
@@ -526,12 +538,15 @@ func TestSchedulerStartsTheFirstBackupWhenAFolderIsSet(t *testing.T) {
 // does, and returns its record.
 func (f *fixture) runAt(t *testing.T, id string, started time.Time) state.BackupRun {
 	t.Helper()
-	schedule, _, err := f.store.BackupSchedule(context.Background())
+	plan, configured, err := f.store.BackupPlan(context.Background(), state.DefaultBackupPlanName)
 	noErr(t, err)
-	run := state.BackupRun{ID: id, Kind: state.BackupRunManual, Status: state.BackupRunning, Destination: schedule.Destination,
+	if !configured {
+		t.Fatal("the default plan is not configured")
+	}
+	run := state.BackupRun{ID: id, Plan: plan.Name, Kind: state.BackupRunManual, Status: state.BackupRunning, Destination: plan.Destination,
 		BackupName: namePrefix + started.UTC().Format("20060102-150405") + "-" + id[:8], Verification: state.BackupVerifyNotRun, StartedAt: started}
 	noErr(t, f.store.StartBackupRun(context.Background(), run))
-	f.service.execute(context.Background(), run, schedule)
+	f.service.execute(context.Background(), run, plan)
 	return f.run(t, id)
 }
 

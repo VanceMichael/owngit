@@ -388,7 +388,7 @@ func SettingsActionGroup(action string) string {
 		return GroupNetwork
 	case ActionSaveTailscale, ActionTailscaleOn, ActionTailscaleOff:
 		return GroupTailscale
-	case ActionSaveBackupSchedule:
+	case ActionSaveBackupSchedule, ActionSaveBackupPlan, ActionCreateBackupPlan, ActionDeleteBackupPlan:
 		return GroupBackups
 	case ActionBackupNow, ActionBackupVerify, ActionBackupDownload, ActionBackupUpload:
 		return GroupBackupRuns

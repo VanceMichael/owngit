@@ -45,7 +45,7 @@ func newRecordsBackupStore(t *testing.T, root string) (*state.Store, *repository
 		`INSERT INTO repository_policies(repository_id,retain_history,protect_default_branch,extra_ref_prefixes,updated_at) VALUES('project',0,1,'["refs/notes/"]',1800000000)`,
 		`UPDATE import_sources SET overwrite_diverged=1,extra_ref_prefixes='["refs/changes/"]',allow_private_network=1,allow_plain_http=1,redirect_policy='same_origin'`,
 		`INSERT INTO share_links(id,repository_id,secret_hash,scope,created_at) VALUES('00000000000000000000000000000001','project',zeroblob(32),'clone',1800000000)`,
-		`INSERT INTO backup_schedule(singleton,enabled,interval_seconds,destination,keep,updated_at) VALUES(1,1,86400,'/home/example/backups',7,1800000000)`,
+		`INSERT INTO backup_plans(name,enabled,interval_seconds,destination,keep,verify,created_at,updated_at) VALUES('default',1,86400,'/home/example/backups',7,1,1800000000,1800000000)`,
 		`INSERT INTO backup_runs(id,kind,status,destination,started_at) VALUES('00000000000000000000000000000002','manual','succeeded','/home/example/backups',1800000000)`,
 		`INSERT INTO push_events(repository_id,ref_name,old_oid,new_oid,refs_updated,pushed_at) VALUES('project','refs/heads/main','','` + strings.Repeat("a", 40) + `',1,1800000000)`,
 		`INSERT INTO metadata(key,value) VALUES('admin_confirmation','never')`,
@@ -109,7 +109,7 @@ func TestFormat11RecordsSurviveBackupAndRestore(t *testing.T) {
 	if got := after.ImportSources[0]; !got.OverwriteDiverged || got.FollowUpstreamDeletions || !reflect.DeepEqual(got.ExtraRefPrefixes, []string{"refs/changes/"}) || got.AllowPrivateNetwork {
 		t.Fatalf("restored import source=%+v", got)
 	}
-	for _, table := range []string{"share_links", "backup_schedule", "backup_runs", "push_events", "sessions", "helper_credentials"} {
+	for _, table := range []string{"share_links", "backup_plans", "backup_runs", "push_events", "sessions", "helper_credentials"} {
 		if count, err := restored.TableRowCount(ctx, table); err != nil || count != 0 {
 			t.Fatalf("%s has %d rows after restore, err=%v", table, count, err)
 		}

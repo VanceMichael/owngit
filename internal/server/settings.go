@@ -391,7 +391,8 @@ func (app *App) handleSettingsPost(writer http.ResponseWriter, request *http.Req
 	case webui.ActionSaveTailscale, webui.ActionTailscaleOn, webui.ActionTailscaleOff:
 		app.changeTailscale(writer, request, settings, csrf, action)
 		return
-	case webui.ActionSaveBackupSchedule, webui.ActionBackupNow, webui.ActionBackupVerify, webui.ActionBackupDownload:
+	case webui.ActionSaveBackupSchedule, webui.ActionSaveBackupPlan, webui.ActionCreateBackupPlan, webui.ActionDeleteBackupPlan,
+		webui.ActionBackupNow, webui.ActionBackupVerify, webui.ActionBackupDownload:
 		app.backupAction(writer, request, settings, csrf, action)
 		return
 	default:
@@ -605,6 +606,7 @@ var settingsDraftFields = map[string]bool{
 	"maintenance_window_start": false, "maintenance_window_end": false, "maintenance_pack_threshold": false, "cleanup_enabled": false,
 	"cleanup_grace":      false,
 	"backup_destination": false, "backup_interval": false, "backup_keep": false, "backup_scheduled": true, "backup_verify": true,
+	"backup_new_plan": false, "backup_new_destination": false,
 	"ceiling_timeout": false, "ceiling_timeout_unit": false, "ceiling_output": false, "ceiling_output_unit": false,
 	"ceiling_queue": false, "ceiling_active": false, "ceiling_cpu": false, "ceiling_cpu_unit": false, "ceiling_memory": false,
 	"ceiling_memory_unit": false, "ceiling_pids": false, "ceiling_scratch": false, "ceiling_scratch_unit": false, "ceiling_source": false,

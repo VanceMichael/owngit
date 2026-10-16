@@ -91,6 +91,39 @@ The commands `owngit backup schedule`, `now`, `status`, `runs`, `check`, `downlo
 - A failed scheduled backup is not retried before the next interval. Run `owngit backup now` to try again.
 - With `--verify on`, OwnGit rehearses a restore of each new backup in the system's temporary folder. That disk needs room for the repositories. A verification that takes longer than 2 hours fails.
 
+### Backup plans
+
+A backup **plan** is a named set of a target directory, an interval, a retention count, and whether to verify. OwnGit keeps up to 50 plans, so the same OwnGit can back up to both the local disk and a folder on an offline or network-mounted drive. Every backup and its recorded run are named with the plan that started it.
+
+A plan name uses letters, digits, underscores and dashes, up to 64 characters (`offsite`, `disk2`, `7d-local`). The plan the first set creates, and every command below without `--plan`, is named `default`.
+
+```sh
+# Create a plan. The defaults are scheduled on, daily, keep 7, verify on;
+# each flag overrides one.
+owngit backup plan create --name offsite --destination /mnt/offline/backups \
+  --interval 7d --keep 3 --verify on
+
+# List plans and read one plan's state.
+owngit backup plan list
+owngit backup schedule show --plan offsite
+
+# Change or switch off one plan, back it up by hand, and read its runs.
+owngit backup schedule set --plan offsite --keep 2
+owngit backup schedule off  --plan offsite
+owngit backup now    --plan offsite
+owngit backup status --plan offsite
+owngit backup runs   --plan offsite
+
+# Delete a plan that is not making a backup.
+owngit backup plan delete --name offsite
+```
+
+In the dashboard, the Backups group lists the saved plans in a chooser: select one to view or change its folder, interval, retention and verification, to back it up now, and to read its recorded backups. A "New plan" form creates a plan, and each plan other than `default` has a "Delete plan" button.
+
+Deleting a plan refuses while one of its backups is running. Deleting removes only the plan's configuration: the backups it wrote and their run history stay listed under the plan's name and stay on disk. OwnGit removes nothing for a deleted plan, so those backups no longer have automatic cleanup; delete their folders by hand when they are no longer needed.
+
+Scheduled backups of all plans share one slot: only one backup, verification or upload runs at a time. When several plans are due, the one due first starts, and equal due times keep the plans' stable order. When a target folder is unavailable, only that plan's run fails; the other plans still run. After fixing the target, retry its plan by hand with `owngit backup now --plan NAME`.
+
 ### Back up now
 
 Choose "Back up now" on the Storage & recovery tab, or run:
@@ -99,21 +132,21 @@ Choose "Back up now" on the Storage & recovery tab, or run:
 owngit backup now
 ```
 
-The backup goes into the schedule's folder, even while scheduled backups are off. The command returns at once. Only one backup, verification or upload runs at a time.
+The backup goes into the plan's folder, even while that plan's scheduled backups are off. Add `--plan NAME` to back up another plan. The command returns at once. Only one backup, verification or upload runs at a time.
 
 ### Check backups
 
 | Command | Shows |
 | --- | --- |
-| `owngit backup status` | The schedule, the running backup, the last backup, the newest verified backup and the next one due |
-| `owngit backup runs` | Every recorded backup with its `id`, `status`, `verification`, `path` and `message` |
+| `owngit backup status` | The default plan's schedule, running backup, last backup, newest verified backup and next due time; add `--plan NAME` for another plan |
+| `owngit backup runs` | Every recorded backup with its `plan`, `id`, `status`, `verification`, `path` and `message`; add `--plan NAME` to list one plan |
 | `owngit backup check --run ID` | Starts a new verification of a kept backup. `ID` is the 32-character `id` from `owngit backup runs`. |
 
 A run's `status` is `running`, `succeeded`, `failed` or `interrupted`. Its `verification` is `passed`, `failed` or `not_run`. Only `passed` means the backup was verified. The dashboard shows the same under Current state and Recorded backups.
 
 ### Which backups OwnGit keeps
 
-Each backup is a new folder in the destination, named `owngit-backup-YYYYMMDD-HHMMSS-XXXXXXXX` (the start time in UTC). After a successful backup, OwnGit keeps the newest `--keep` backups plus the newest verified one, and deletes its older backups in that folder.
+Each backup is a new folder in the plan's destination, named `owngit-backup-YYYYMMDD-HHMMSS-XXXXXXXX` (the start time in UTC). After a successful backup, OwnGit keeps the newest `--keep` backups of the plan plus the plan's newest verified one, and removes older backups of that plan. Cleanup is per plan, even when two plans use the same folder: one plan never deletes another plan's backups.
 
 - OwnGit deletes only backups it made and recorded. Other files in the folder stay. A backup folder that you changed, for example by adding a file, also stays, and the next backup's message names it.
 - A backup that fails its verification does not count toward `--keep` and never replaces a verified backup. OwnGit keeps only the newest failed one, so you can inspect it, and deletes its older failed ones. The next backup that passes verification deletes it too. A verification that cannot finish, for example because it ran out of time or temporary space, counts as failed.
@@ -234,7 +267,7 @@ Start OwnGit with the restored folders before you use them in any other way. The
 - Helper credentials and runner tokens: the old ones are refused, so create new ones.
 - Consent to run automatic checks.
 - Import credentials, each source's connection choices, and import schedules.
-- The backup schedule. Earlier backups are no longer listed, but their folders stay and `owngit restore` still reads them.
+- The backup plans. Earlier backups are no longer listed, but their folders stay and `owngit restore` still reads them. After moving OwnGit to another computer, recreate your plans (`owngit backup plan create`, or the New plan form); the old plans are safe to leave on the computer they backed up.
 - Backup before an upgrade is turned on again. Turn it off again if you had turned it off.
 - Server-wide settings are back at their defaults. Set them again under Settings or with `owngit settings set`.
 
