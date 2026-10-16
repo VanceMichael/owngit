@@ -41,7 +41,10 @@ type RepositoryPolicy struct {
 	// ExtraRefPrefixes are ref namespaces beyond branches and tags that
 	// pushes may change, such as refs/notes/.
 	ExtraRefPrefixes []string
-	UpdatedAt        time.Time
+	// Archived makes the repository answer every read and refuse every
+	// write, including imports. It survives restarts and backups.
+	Archived  bool
+	UpdatedAt time.Time
 }
 
 // IsDefault reports whether the policy equals having no row.
@@ -205,7 +208,7 @@ func readRepositoryRecords(ctx context.Context, tx *sql.Tx, snapshot *RecoverySt
 	if err := closeRows(rows); err != nil {
 		return err
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT repository_id,retain_history,protect_default_branch,extra_ref_prefixes,updated_at FROM repository_policies ORDER BY repository_id`)
+	rows, err = tx.QueryContext(ctx, `SELECT repository_id,retain_history,protect_default_branch,extra_ref_prefixes,archived,updated_at FROM repository_policies ORDER BY repository_id`)
 	if err != nil {
 		return err
 	}
@@ -213,8 +216,9 @@ func readRepositoryRecords(ctx context.Context, tx *sql.Tx, snapshot *RecoverySt
 		var policy RepositoryPolicy
 		var retain sql.NullBool
 		var prefixes string
+		var archived int64
 		var updated int64
-		if err := rows.Scan(&policy.RepositoryID, &retain, &policy.ProtectDefaultBranch, &prefixes, &updated); err != nil {
+		if err := rows.Scan(&policy.RepositoryID, &retain, &policy.ProtectDefaultBranch, &prefixes, &archived, &updated); err != nil {
 			rows.Close()
 			return err
 		}
@@ -225,6 +229,7 @@ func readRepositoryRecords(ctx context.Context, tx *sql.Tx, snapshot *RecoverySt
 			rows.Close()
 			return fmt.Errorf("repository %q policy: %w", policy.RepositoryID, err)
 		}
+		policy.Archived = archived == 1
 		policy.UpdatedAt = unixTime(updated)
 		snapshot.RepositoryPolicies = append(snapshot.RepositoryPolicies, policy)
 	}
@@ -247,8 +252,8 @@ func restoreRepositoryRecords(ctx context.Context, tx *sql.Tx, snapshot Recovery
 		if policy.RetainHistory != nil {
 			retain = boolInt(*policy.RetainHistory)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO repository_policies(repository_id,retain_history,protect_default_branch,extra_ref_prefixes,updated_at) VALUES(?,?,?,?,?)`,
-			policy.RepositoryID, retain, boolInt(policy.ProtectDefaultBranch), prefixes, policy.UpdatedAt.Unix()); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO repository_policies(repository_id,retain_history,protect_default_branch,extra_ref_prefixes,archived,updated_at) VALUES(?,?,?,?,?,?)`,
+			policy.RepositoryID, retain, boolInt(policy.ProtectDefaultBranch), prefixes, boolInt(policy.Archived), policy.UpdatedAt.Unix()); err != nil {
 			return fmt.Errorf("restore repository %q policy: %w", policy.RepositoryID, err)
 		}
 	}

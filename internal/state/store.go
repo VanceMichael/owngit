@@ -697,7 +697,9 @@ type schemaStep struct {
 // version 15 admits closed pull requests, and version 16 adds the durable
 // fields of 1.1.3: pull request text and actors, repository names and
 // policies, import options, share links, scheduled backups, recent pushes,
-// and the start time of each raw check log for its cleanup.
+// and the start time of each raw check log for its cleanup. Version 17
+// rebuilds the check jobs table and records workflow runs; version 18 marks
+// archived repositories in their policy row.
 // The 1.0.0 to 1.0.2 releases wrote schema 14, and 1.0.3 to 1.1.2 wrote
 // schema 15.
 // Schema 12 has no ownership rows. A missing row never authorizes removal or
@@ -1756,6 +1758,12 @@ var schemaSteps = []schemaStep{
 			FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX actions_schedules_due ON actions_schedules(next_due_at)`,
+	}},
+	// Version 18 records whether a repository is archived. An archived
+	// repository answers every read but refuses every write; see
+	// repository_policies.archived and the repository package's archive guard.
+	{version: 18, statements: []string{
+		`ALTER TABLE repository_policies ADD COLUMN archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1))`,
 	}},
 }
 

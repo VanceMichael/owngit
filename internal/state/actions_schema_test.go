@@ -218,8 +218,8 @@ func TestReleasedReaderRefusesActionsSchemaUnchanged(t *testing.T) {
 	if store != nil {
 		store.Close()
 	}
-	if err == nil || !strings.Contains(err.Error(), "schema version 17 is newer") {
-		t.Fatalf("schema-16 reader=%v", err)
+	if err == nil || !strings.Contains(err.Error(), "schema version 18 is newer") {
+		t.Fatalf("schema-17 reader=%v", err)
 	}
 	assertSchemaDirectoryUnchanged(t, directory, before)
 }
